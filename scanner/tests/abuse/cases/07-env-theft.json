@@ -1,0 +1,20 @@
+{
+  "$comment": "S4-C battery: env allowlist + secret non-echo. Only PLATFORM_JOB_ID (+ base PATH/HOME) expected; runtime must never echo injected values into logsTail.",
+  "id": "env-allowlist-no-echo",
+  "threat": "Secret leakage",
+  "mechanism": "scheduler-injected PLATFORM_JOB_ID only; job-scoped values never baked into images, never echoed by runtime",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["env | sort | cut -d= -f1 > /out/keys.txt; cat /out/keys.txt"],
+    "jobId": "job-battery-secret-42",
+    "env": { "PLATFORM_SCAN_SECRET_CANARY": "canary-value-must-not-leak" },
+    "limitsProfile": "small",
+    "egress": { "mode": "offline" }
+  },
+  "expect": {
+    "kind": "envAllowlist",
+    "allowedKeys": ["PATH", "HOME", "PLATFORM_JOB_ID", "HOSTNAME", "PWD", "SHLVL", "_"],
+    "mustIncludeKeys": ["PLATFORM_JOB_ID"],
+    "logsForbid": ["canary-value-must-not-leak", "PLATFORM_SCAN_SECRET_CANARY"]
+  }
+}

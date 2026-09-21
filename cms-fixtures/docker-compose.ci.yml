@@ -1,0 +1,138 @@
+name: s6-cms-fixtures
+
+# S6-D2: CMS fixture runtime for Oscar's S6-D6 live cross-stack validation (CI).
+# Brings up the four CMS families (Payload/Directus/Strapi/WordPress-headless) as
+# containers + the platform API sink (runs migration 006_scan_findings) so D3/D4
+# findings persist. CI egress is default-deny (apply ci-egress-allowlist.sh on host).
+# Build: docker compose -f docker-compose.ci.yml --env-file ci/.env up --build
+
+networks:
+  s6net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  mysqldata:
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devsecops}
+      POSTGRES_DB: ${POSTGRES_DB:-platform}
+    command: ["postgres", "-c", "max_connections=${PG_MAX_CONNECTIONS:-200}"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform} -d ${POSTGRES_DB:-platform}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    networks: [s6net]
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devsecops}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-wordpress}
+      MYSQL_USER: ${MYSQL_USER:-wp}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-devsecops}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD:-devsecops}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes: ["mysqldata:/var/lib/mysql"]
+    networks: [s6net]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: cms-fixtures/ci/Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${API_DATABASE_URL:-postgres://platform:devsecops@postgres:5432/platform?sslmode=disable}
+      PORT: "4000"
+    expose: ["4000"]
+    # S6-D6 scan volume: Oscar's headless-validate.mjs battery scans the seeded
+    # NEXT_PUBLIC_* leaks here (read-only). Run: docker compose run api node tests/fixtures/headless-validate.mjs
+    volumes:
+      - ../tests/fixtures/headless:/fixtures/headless:ro
+    networks: [s6net]
+    restart: unless-stopped
+
+  cms-payload-basic:
+    build:
+      context: ../tests/fixtures/repos/payload-basic
+      dockerfile: cms-fixtures/images/cms-payload-basic/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URI: ${CMS_PAYLOAD_DATABASE_URL:-postgres://platform:devsecops@postgres:5432/platform?sslmode=disable}
+    expose: ["3000"]
+    networks: [s6net]
+
+  cms-directus-basic:
+    build:
+      context: ../tests/fixtures/repos/directus-basic
+      dockerfile: cms-fixtures/images/cms-directus-basic/Dockerfile
+    environment:
+      DATABASE_URL: "sqlite:/tmp/directus.db"
+    expose: ["8055"]
+    networks: [s6net]
+
+  cms-strapi-basic:
+    build:
+      context: ../tests/fixtures/repos/strapi-basic
+      dockerfile: cms-fixtures/images/cms-strapi-basic/Dockerfile
+    environment:
+      NODE_ENV: development
+    expose: ["1337"]
+    networks: [s6net]
+
+  cms-headless-next-payload:
+    build:
+      context: ../tests/fixtures/repos/headless-next-payload
+      dockerfile: cms-fixtures/images/cms-headless-next-payload/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cms-payload-basic:
+        condition: service_started
+    environment:
+      DATABASE_URI: ${CMS_NEXTPAYLOAD_DATABASE_URL:-postgres://platform:devsecops@postgres:5432/platform?sslmode=disable}
+      NEXT_PUBLIC_CMS_URL: "http://cms-payload-basic:3000"
+    expose: ["3100"]
+    networks: [s6net]
+
+  cms-headless-next-wordpress:
+    build:
+      context: ../tests/fixtures/repos/headless-next-wordpress
+      dockerfile: cms-fixtures/images/cms-headless-next-wordpress/Dockerfile
+    depends_on:
+      cms-wordpress:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_WP_URL: "http://cms-wordpress:8080"
+    expose: ["3200"]
+    networks: [s6net]
+
+  cms-wordpress:
+    build:
+      context: ../tests/fixtures/repos/headless-next-wordpress
+      dockerfile: cms-fixtures/images/cms-wordpress/Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: "mysql:3306"
+      WORDPRESS_DB_USER: ${MYSQL_USER:-wp}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD:-devsecops}
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE:-wordpress}
+    expose: ["8080"]
+    networks: [s6net]

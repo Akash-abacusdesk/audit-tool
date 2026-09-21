@@ -1,0 +1,27 @@
+ARG NODE_DIGEST=
+FROM docker.io/library/node:20-slim${NODE_DIGEST}
+
+LABEL org.opencontainers.image.title="devsecops/platform-api" \
+      org.opencontainers.image.version="ci" \
+      org.opencontainers.image.base="docker.io/library/node:20-slim"
+
+ENV HOME=/tmp \
+    NODE_ENV=production
+
+WORKDIR /app
+
+# Monorepo workspace install (hoists @platform/* + apps/api deps).
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+
+# Build only the API package (dist/ already present in repo; rebuild for CI parity).
+RUN npm run build -w apps/api
+
+USER 10001
+
+EXPOSE 4000
+
+# Wait for PG, run ALL migrations (incl 006_scan_findings), then boot the API sink.
+ENTRYPOINT ["sh", "/app/cms-fixtures/ci/api-entrypoint.sh"]

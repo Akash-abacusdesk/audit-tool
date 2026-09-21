@@ -1,0 +1,80 @@
+{
+  "$comment": "Machine-readable CMS/stack signatures for S1-D4. Signals mirror PRD 7.1 lines 516-559. Consumers: stack detection, shared TS types (map ids 1:1 when Jim's types package lands, conv S1-monorepo), scanner inventory (Dwight S1-D3).",
+  "version": "1.0.0",
+  "stacks": [
+    {
+      "id": "wordpress",
+      "label": "Traditional WordPress (PHP)",
+      "detection_signals": {
+        "files_any": ["wp-config.php"],
+        "paths_any": ["wp-content/plugins/**", "wp-content/themes/**"],
+        "manifests_any": [{ "file": "composer.json", "condition": "present with PHP source layout" }],
+        "metadata_any": ["deployment metadata indicating WordPress target"]
+      },
+      "deployment_pattern": "docs/cms/wp-deployment-patterns.md#pattern-w1--traditional-wordpress-monolithic",
+      "update_surface": "safe-update-engine-only",
+      "remote_control_surface": "docs/cms/wp-remote-control-boundaries.md",
+      "mutation_events": true
+    },
+    {
+      "id": "nextjs",
+      "label": "Next.js / TypeScript",
+      "detection_signals": {
+        "manifests_any": [
+          { "file": "package.json", "condition": "contains 'next' dependency" }
+        ],
+        "files_any": ["next.config.js", "next.config.mjs", "next.config.ts"]
+      },
+      "deployment_pattern": "docs/cms/headless-integration-patterns.md#common-rules-all-headless-stacks"
+    },
+    {
+      "id": "payload",
+      "label": "Payload CMS",
+      "detection_signals": {
+        "manifests_any": [
+          { "file": "package.json", "condition": "contains 'payload' dependency" }
+        ],
+        "files_any": ["payload.config.js", "payload.config.ts", "payload.config.mjs"],
+        "paths_any": ["collections/**", "globals/**"],
+        "endpoints_any": ["/api/payload-rest", "/api/graphql", "generated types output"]
+      },
+      "deployment_pattern": "docs/cms/headless-integration-patterns.md#h1--payload-cms"
+    },
+    {
+      "id": "directus",
+      "label": "Directus",
+      "detection_signals": {
+        "manifests_any": [
+          { "file": "package.json", "condition": "contains 'directus' or any '@directus/*' dependency" }
+        ],
+        "code_any": ["Directus SDK usage"],
+        "config_any": ["Directus REST/GraphQL endpoint configuration"],
+        "metadata_any": ["deployment metadata identifying a Directus backend"]
+      },
+      "deployment_pattern": "docs/cms/headless-integration-patterns.md#h2--directus"
+    },
+    {
+      "id": "strapi",
+      "label": "Strapi",
+      "detection_signals": {
+        "manifests_any": [
+          { "file": "package.json", "condition": "contains any '@strapi/*' dependency" }
+        ],
+        "files_any": ["config/api.js", "config/api.ts", "config/server.js", "config/server.ts"],
+        "paths_any": ["src/api/**"],
+        "code_any": ["Strapi REST/GraphQL SDK or endpoint usage"]
+      },
+      "deployment_pattern": "docs/cms/headless-integration-patterns.md#h3--strapi"
+    }
+  ],
+  "relationships": {
+    "$comment": "PRD lines 554-558: headless is a relationship label, not a stack; projects may carry multiple labels.",
+    "headless": {
+      "label": "Headless / decoupled frontend-backend pair",
+      "frontend_stacks": ["nextjs"],
+      "backend_stacks": ["wordpress", "payload", "directus", "strapi"],
+      "required_metadata": ["frontend_project_id", "backend_project_id", "api_protocol(rest|graphql)"]
+    },
+    "ambiguous_policy": "manual_review_required"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "fx-directus-basic",
+  "private": true,
+  "dependencies": {
+    "directus": "^11.0.0"
+  }
+}

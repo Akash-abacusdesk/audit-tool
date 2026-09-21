@@ -1,0 +1,13 @@
+{
+  "$comment": "S4-C battery: bridge-mode egress RECORD-ONLY row. Documented gap: destination allowlisting (host iptables DOCKER-USER) is a named follow-up BEFORE default-deny can be asserted for target classes; on Windows dev this mode has unrestricted egress. This case records observed behavior, never fails the battery.",
+  "id": "egress-bridge-record-only",
+  "threat": "Bridge-class egress allowlist gap (documented)",
+  "mechanism": "per-run bridged network with NAT; allowlist enforcement pending",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["wget -q -T 5 -O /dev/null http://example.com/ && echo EGRESS-OK || echo EGRESS-BLOCKED"],
+    "limitsProfile": "small",
+    "egress": { "mode": "bridge" }
+  },
+  "expect": { "kind": "recordOnly", "note": "either outcome valid until DOCKER-USER allowlist lands (Linux)" }
+}

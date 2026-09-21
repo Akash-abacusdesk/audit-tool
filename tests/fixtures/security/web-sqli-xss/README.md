@@ -1,0 +1,1 @@
+# web-sqli-xss - S5 Semgrep expected: sqli (string concat query), xss (unescaped reflection into response).

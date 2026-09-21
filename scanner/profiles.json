@@ -1,0 +1,46 @@
+{
+  "$comment": "Scanner resource profiles for ephemeral workers (S4-C). Ceilings enforced by the worker runtime (S4-B); capacity-agnostic by design - no host-size assumptions. Owner: D3 (dwight). Bump policy matches tools.json (90-day review).",
+  "manifest_version": 1,
+  "updated": "2026-08-26",
+  "owner": "D3-Security",
+  "profiles": {
+    "small": {
+      "cpu_cores": 1,
+      "memory_mb": 512,
+      "pids_limit": 128,
+      "disk_mb": 1024,
+      "timeout_seconds": 900,
+      "typical": "single-binary checks over bounded inputs"
+    },
+    "medium": {
+      "cpu_cores": 2,
+      "memory_mb": 2048,
+      "pids_limit": 512,
+      "disk_mb": 4096,
+      "timeout_seconds": 3600,
+      "typical": "repo-wide static analysis, CMS correlation"
+    },
+    "large": {
+      "cpu_cores": 4,
+      "memory_mb": 4096,
+      "pids_limit": 1024,
+      "disk_mb": 8192,
+      "timeout_seconds": 7200,
+      "typical": "dependency DB refresh + image/IaC scans, staged DAST crawls"
+    }
+  },
+  "tool_profiles": {
+    "gitleaks": "small",
+    "testssl.sh": "small",
+    "lynis": "small",
+    "wpscan": "medium",
+    "semgrep": "medium",
+    "trivy": "large",
+    "zap": "large"
+  },
+  "notes": [
+    "timeout_seconds is the hard SIGTERM->SIGKILL budget; grace period is worker-runtime-owned (S4-B contract).",
+    "pids_limit caps fork bombs before the abuse battery ever sees them; battery still asserts denial behavior.",
+    "Profile assignment may be overridden per scan_run by scheduler admission (S4-A) within these ceilings."
+  ]
+}

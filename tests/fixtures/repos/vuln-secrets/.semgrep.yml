@@ -1,0 +1,6 @@
+rules:
+  - id: hardcoded-password
+    message: Hardcoded password in source
+    severity: ERROR
+    languages: [javascript]
+    pattern: $X = 'hardcoded-password'

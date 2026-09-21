@@ -1,0 +1,7 @@
+{
+  "secret": "s8-demo-shared-secret",
+  "body": "{\"schema_version\":\"wp-mutation-events/1.0\",\"site_id\":\"site-demo-001\",\"delivery_id\":\"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\"event_type\":\"wp.mutation.plugin_install\",\"occurred_at\":\"2026-08-28T09:00:00Z\",\"actor\":{\"type\":\"human\",\"id\":\"admin1\",\"ip\":\"203.0.113.7\",\"grant_id\":null},\"request_id\":null,\"details\":{\"object\":\"hello-dolly/hello-dolly.php\",\"object_type\":\"wp_plugin\",\"action\":\"install\"}}",
+  "signature_header": "sha256=785b6d655b03d5c6383b88c2fbdf5199d66661639d6b01ef6fc7dfcf85870b8d",
+  "delivery_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "site_id": "site-demo-001"
+}

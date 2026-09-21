@@ -1,0 +1,1 @@
+# gitleaks-fp - S5 false-positive handling: these patterns resemble secrets but are documented examples/test fixtures; Gitleaks should allowlist / not flag, or flagged-then-suppressed. Validates FP handling.

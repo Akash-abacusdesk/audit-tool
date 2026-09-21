@@ -1,0 +1,10 @@
+{
+    admin off
+}
+
+# Private/VPN-only Vaultwarden reverse proxy. Bind Caddy itself only to the
+# Security / Recovery Host private interface, and enforce firewall rules outside Caddy.
+vaultwarden.internal.example {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080
+}

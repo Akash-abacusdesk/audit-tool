@@ -1,0 +1,14 @@
+{
+  "$comment": "S4-C battery: fork bomb containment under pids_limit. Containment semantics: run must terminate (fork failures or watchdog), host engine stays healthy, zero leftovers.",
+  "id": "fork-bomb-containment",
+  "threat": "Fork bomb",
+  "mechanism": "--pids-limit from profiles.json ceilings",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["while true; do sh -c 'true' & done"],
+    "limitsProfile": "small",
+    "timeoutSeconds": 20,
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "containedRunaway", "statuses": ["failed", "timedOut"], "maxElapsedMs": 60000 }
+}

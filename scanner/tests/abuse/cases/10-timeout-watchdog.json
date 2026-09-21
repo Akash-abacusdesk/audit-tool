@@ -1,0 +1,14 @@
+{
+  "$comment": "S4-C battery: watchdog expiry -> timedOut inside budget+grace.",
+  "id": "timeout-watchdog",
+  "threat": "Runaway duration",
+  "mechanism": "watchdog -> stop -t (SIGTERM) -> WORKER_TERM_GRACE_MS -> SIGKILL; teardown unconditional",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["sleep 120"],
+    "limitsProfile": "small",
+    "timeoutSeconds": 3,
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "timedOut", "maxElapsedMs": 30000 }
+}

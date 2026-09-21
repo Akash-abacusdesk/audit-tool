@@ -1,0 +1,12 @@
+{
+  "$comment": "S4-C battery: non-root positive control - probe runs as uid 10001, real scanner image preflight passes.",
+  "id": "nonroot-positive",
+  "threat": "Root execution (positive control)",
+  "mechanism": "image-declared USER wins; probe asserts uid 10001 inside container; gitleaks image user parsed as non-root",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["id -u"],
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "logsContain", "values": ["10001"], "status": "completed", "exitCode": 0 }
+}

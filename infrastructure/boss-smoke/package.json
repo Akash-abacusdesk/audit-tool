@@ -1,0 +1,8 @@
+{
+  "name": "boss-smoke",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pg-boss": "^12.27.0"
+  }
+}

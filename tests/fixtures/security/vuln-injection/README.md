@@ -1,0 +1,1 @@
+# vuln-injection - S5 Semgrep expected: command-injection (child_process.exec concat), sqli (string concat query), eval-usage.

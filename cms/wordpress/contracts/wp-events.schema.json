@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wp-mutation-events/1.0",
+  "title": "S8-D4 WordPress signed mutation events + JIT redemption contract",
+  "description": "Event envelope emitted by the WP MU-plugin (kevin S8-D4) and verified by the central ingest (Jim S8-D1). Signature = HMAC-SHA256(rawJsonBody, S8_WP_EVENT_SECRET), header X-WP-Signature: sha256=<hex>. Replay protection: advisory freshness window on occurred_at + authoritative dedup on (site_id, delivery_id) server-side.",
+  "type": "object",
+  "required": ["schema_version", "site_id", "delivery_id", "event_type", "occurred_at", "actor"],
+  "properties": {
+    "schema_version": { "const": "wp-mutation-events/1.0" },
+    "site_id": { "type": "string", "minLength": 1, "description": "deployment_id of the managed site" },
+    "delivery_id": { "type": "string", "format": "uuid", "description": "per-event unique id for replay dedup" },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "wp.mutation.admin_user_create",
+        "wp.mutation.admin_user_delete",
+        "wp.mutation.role_change",
+        "wp.mutation.plugin_install",
+        "wp.mutation.plugin_activate",
+        "wp.mutation.plugin_deactivate",
+        "wp.mutation.plugin_update",
+        "wp.mutation.plugin_delete",
+        "wp.mutation.core_update",
+        "wp.jit.session_create",
+        "wp.jit.session_revoke"
+      ]
+    },
+    "occurred_at": { "type": "string", "format": "date-time", "description": "RFC3339 UTC; central rejects beyond freshness window" },
+    "actor": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["human", "system", "jit"] },
+        "id": { "type": "string" },
+        "ip": { "type": ["string", "null"] },
+        "grant_id": { "type": ["string", "null"], "description": "JIT grant id when type=jit" }
+      }
+    },
+    "request_id": { "type": ["string", "null"], "format": "uuid" },
+    "details": { "type": "object" }
+  },
+  "x-ingest-contract": {
+    "description": "Canonical central ingest (Jim S8-D1). Confirmed via hive 2026-08-28T09-00-01-000Z-jim-kevin.",
+    "path": "POST /api/v1/wp/mutation-events",
+    "headers": {
+      "Content-Type": "application/json",
+      "X-WP-Signature": "sha256=<hmac-sha256 hex> (also accepted case-insensitive: x-wp-signature)",
+      "X-WP-Delivery": "<uuid delivery_id used as dedup key>",
+      "X-WP-Site": "optional; site_id is read from the envelope body",
+      "x-wp-ts": "optional ~60s unix-ms timestamp; freshness also accepted via envelope occurred_at"
+    },
+    "verify": "HMAC-SHA256(rawBody, S8_WP_EVENT_SECRET) hex, compared with timingSafeEqual; generic 401 on miss",
+    "dedup": "authoritative dedup on (site_id, delivery_id)"
+  },
+  "x-redemption-contract": {
+    "description": "One-time JIT redemption (WP-side <-> central). No shared/permanent admin password exists (PRD 2.1(5), §11).",
+    "request": {
+      "method": "POST",
+      "path": "/api/v1/jit/requests",
+      "body": { "reason": "string", "duration_minutes": "integer", "site_id": "string" },
+      "response": "202 { request_id: uuid }"
+    },
+    "redeem": {
+      "method": "POST",
+      "path": "/api/v1/jit/redeem",
+      "body": { "token_hash": "sha256 hex of opaque one-time token", "request_id": "uuid" },
+      "response": "200 { grant_id: string, ttl_seconds: integer, requester: string }",
+      "note": "central marks token consumed atomically; WP stores token_hash ONLY (hash-only storage) and provisions a short-lived administrator with a single-fire auto-revoke cron."
+    },
+    "wp_rest_hooks": {
+      "redeem": "POST /wp-json/s8/v1/jit/redeem { token, request_id }",
+      "request": "POST /wp-json/s8/v1/jit/request { reason, duration_minutes } (requires manage_options)"
+    }
+  }
+}

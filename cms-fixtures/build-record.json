@@ -1,0 +1,17 @@
+{
+  "$comment": "S6-D2 build record. Mirrors scanner/build-record.json. Local image IDs populate at first CI packaging build (docker build --build-arg NODE_DIGEST=<resolved> ...). Bases are digest-pinned at build time; this file records the resulting config digests. Until CI runs, image_id = pending.",
+  "manifest_version": 1,
+  "built_at": "pending-CI",
+  "built_by": "D2-Platform",
+  "builder": "docker engine (CI runner)",
+  "$note": "Node CMS fixtures: FROM node:20-slim + NODE_DIGEST build-arg. cms-wordpress: FROM wordpress:6.6-apache + WP_DIGEST. platform-api: node:20-slim building monorepo apps/api, runs migrations then boots. All non-root (node USER 10001; wordpress www-data). Egress default-deny (ci-egress-allowlist.sh); no external egress for S6-D6 detection.",
+  "images": [
+    { "tool": "cms-payload-basic", "tag": "devsecops/cms-payload-basic:fixture", "base": "docker.io/library/node:20-slim", "image_id": "pending-CI" },
+    { "tool": "cms-directus-basic", "tag": "devsecops/cms-directus-basic:fixture", "base": "docker.io/library/node:20-slim", "image_id": "pending-CI" },
+    { "tool": "cms-strapi-basic", "tag": "devsecops/cms-strapi-basic:fixture", "base": "docker.io/library/node:20-slim", "image_id": "pending-CI" },
+    { "tool": "cms-headless-next-payload", "tag": "devsecops/cms-headless-next-payload:fixture", "base": "docker.io/library/node:20-slim", "image_id": "pending-CI" },
+    { "tool": "cms-headless-next-wordpress", "tag": "devsecops/cms-headless-next-wordpress:fixture", "base": "docker.io/library/node:20-slim", "image_id": "pending-CI" },
+    { "tool": "cms-wordpress", "tag": "devsecops/cms-wordpress:fixture", "base": "docker.io/library/wordpress:6.6-apache", "image_id": "pending-CI" },
+    { "tool": "platform-api", "tag": "devsecops/platform-api:ci", "base": "docker.io/library/node:20-slim", "image_id": "pending-CI" }
+  ]
+}

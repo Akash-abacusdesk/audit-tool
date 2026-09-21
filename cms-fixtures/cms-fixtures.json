@@ -1,0 +1,78 @@
+{
+  "$comment": "S6-D2 CMS fixture image manifest. Owner: D2 (pam). Mirrors scanner/tools.json packaging (SCANNING-CONVENTIONS sec5). Build context + dockerfile per image; bases are digest-pinned at CI build via NODE_DIGEST/WP_DIGEST build-arg (resolved digest recorded in build-record.json). Egress: NONE required for S6-D6 detection (default-deny floor, sec5.2); only api.wpvulndb.com sanctioned when WPVULNDB_ENABLED=1.",
+  "manifest_version": 1,
+  "updated": "2026-08-27",
+  "owner": "D2-Platform",
+  "images": [
+    {
+      "name": "cms-payload-basic",
+      "family": "Payload",
+      "repo": "tool/tests/fixtures/repos/payload-basic",
+      "dockerfile": "tool/cms-fixtures/images/cms-payload-basic/Dockerfile",
+      "base": "docker.io/library/node:20-slim",
+      "port": 3000,
+      "runtime": "Payload admin API (needs DATABASE_URI; CI wires postgres sidecar)",
+      "egress": "none"
+    },
+    {
+      "name": "cms-directus-basic",
+      "family": "Directus",
+      "repo": "tool/tests/fixtures/repos/directus-basic",
+      "dockerfile": "tool/cms-fixtures/images/cms-directus-basic/Dockerfile",
+      "base": "docker.io/library/node:20-slim",
+      "port": 8055,
+      "runtime": "Directus start (sqlite:/tmp/directus.db)",
+      "egress": "none"
+    },
+    {
+      "name": "cms-strapi-basic",
+      "family": "Strapi",
+      "repo": "tool/tests/fixtures/repos/strapi-basic",
+      "dockerfile": "tool/cms-fixtures/images/cms-strapi-basic/Dockerfile",
+      "base": "docker.io/library/node:20-slim",
+      "port": 1337,
+      "runtime": "Strapi start (sqlite default in /app)",
+      "egress": "none"
+    },
+    {
+      "name": "cms-headless-next-payload",
+      "family": "Payload",
+      "repo": "tool/tests/fixtures/repos/headless-next-payload",
+      "dockerfile": "tool/cms-fixtures/images/cms-headless-next-payload/Dockerfile",
+      "base": "docker.io/library/node:20-slim",
+      "port": 3100,
+      "runtime": "Next.js dev frontend (NEXT_PUBLIC_CMS_URL -> cms-payload-basic)",
+      "egress": "none"
+    },
+    {
+      "name": "cms-headless-next-wordpress",
+      "family": "WordPress-headless",
+      "repo": "tool/tests/fixtures/repos/headless-next-wordpress",
+      "dockerfile": "tool/cms-fixtures/images/cms-headless-next-wordpress/Dockerfile",
+      "base": "docker.io/library/node:20-slim",
+      "port": 3200,
+      "runtime": "Next.js dev frontend (NEXT_PUBLIC_WP_URL -> cms-wordpress)",
+      "egress": "none"
+    },
+    {
+      "name": "cms-wordpress",
+      "family": "WordPress-headless",
+      "repo": "tool/tests/fixtures/repos/headless-next-wordpress (wp-content)",
+      "dockerfile": "tool/cms-fixtures/images/cms-wordpress/Dockerfile",
+      "base": "docker.io/library/wordpress:6.6-apache",
+      "port": 8080,
+      "runtime": "WordPress PHP backend (mysql sidecar; official image USER www-data)",
+      "egress": "none (api.wpvulndb.com only if WPVULNDB_ENABLED=1)"
+    },
+    {
+      "name": "platform-api",
+      "family": "sink",
+      "repo": "tool (monorepo)",
+      "dockerfile": "tool/cms-fixtures/ci/Dockerfile.api",
+      "base": "docker.io/library/node:20-slim",
+      "port": 4000,
+      "runtime": "Runs ALL migrations (incl 006_scan_findings) then boots API sink",
+      "egress": "none"
+    }
+  ]
+}

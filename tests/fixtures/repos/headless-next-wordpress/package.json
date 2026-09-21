@@ -1,0 +1,7 @@
+{
+  "name": "fx-headless-next-wordpress",
+  "private": true,
+  "dependencies": {
+    "next": "^15.0.0"
+  }
+}

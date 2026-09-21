@@ -1,0 +1,8 @@
+{
+  "$comment": "S4-C battery: orphan sweeper tick executes clean over labeled resources (post-restart min-age semantics documented in worker-runtime-isolation.md).",
+  "id": "orphan-sweep-tick",
+  "threat": "Orphans after crash/reboot",
+  "mechanism": "label sweep com.platform.worker=true/.net=true with WORKER_ORPHAN_MIN_AGE_MS guard",
+  "spec": {},
+  "expect": { "kind": "sweepTick", "returnsCounts": true }
+}

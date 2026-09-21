@@ -1,0 +1,15 @@
+{
+  "schema_version": "wp-inventory/1.0",
+  "site_id": "site-prod-01",
+  "collected_at": "2026-08-29T04:00:00Z",
+  "core": { "version": "6.4.2" },
+  "plugins": [
+    { "name": "Akismet", "slug": "akismet", "version": "5.3.1", "active": true },
+    { "name": "Elementor", "slug": "elementor", "version": "3.21.0", "active": true },
+    { "name": "Hello Dolly", "slug": "hello-dolly", "version": "1.7.2", "active": false }
+  ],
+  "themes": [
+    { "name": "Twenty Twenty-Four", "slug": "twentytwentyfour", "version": "1.1", "active": true },
+    { "name": "Twenty Twenty-Three", "slug": "twentytwentythree", "version": "1.2", "active": false }
+  ]
+}

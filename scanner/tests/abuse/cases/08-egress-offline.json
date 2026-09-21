@@ -1,0 +1,13 @@
+{
+  "$comment": "S4-C battery: offline egress hard-deny via per-run internal network.",
+  "id": "egress-offline-deny",
+  "threat": "Unapproved egress (none-class tools)",
+  "mechanism": "per-run network platform-wnet-<runId> with docker --internal (no external route)",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["wget -q -T 5 -O /dev/null http://example.com/ && echo EGRESS-LEAK || echo EGRESS-DENIED"],
+    "limitsProfile": "small",
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "logsContain", "values": ["EGRESS-DENIED"], "logsForbid": ["EGRESS-LEAK"], "status": "completed" }
+}

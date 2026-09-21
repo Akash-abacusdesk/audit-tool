@@ -1,0 +1,10 @@
+{
+  "$comment": "S4-C isolation battery case: root-image preflight denial.",
+  "id": "root-image-deny",
+  "threat": "Root execution",
+  "mechanism": "preflightNonRoot denies images whose Config.User is empty/root; no --user override",
+  "spec": {
+    "image": "postgres:17-alpine"
+  },
+  "expect": { "kind": "preflightDeny", "errorPattern": "refusing|root" }
+}

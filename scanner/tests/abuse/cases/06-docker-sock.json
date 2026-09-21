@@ -1,0 +1,13 @@
+{
+  "$comment": "S4-C battery: docker socket absence inside worker (host escape via mounts).",
+  "id": "docker-sock-absent",
+  "threat": "Docker socket / host escape via mounts",
+  "mechanism": "no socket mounted; engine CLI runs host-side only",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["[ -e /var/run/docker.sock ] && echo SOCK-PRESENT || echo SOCK-ABSENT"],
+    "limitsProfile": "small",
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "logsContain", "values": ["SOCK-ABSENT"], "logsForbid": ["SOCK-PRESENT"], "status": "completed", "exitCode": 0 }
+}

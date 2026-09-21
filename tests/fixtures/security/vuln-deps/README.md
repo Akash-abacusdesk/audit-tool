@@ -1,0 +1,1 @@
+# vuln-deps - S5 SCA/npm-audit expected: lodash<4.17.21 (CVE-2020-8203), minimist<1.2.6 (prototype pollution), express<4.17.3.

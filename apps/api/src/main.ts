@@ -1,0 +1,110 @@
+import { loadConfig } from './config.js';
+import { JOB, webhookReceivedPayload } from '@platform/shared';
+import { createPool } from './db/pool.js';
+import { migrate } from './db/migrate.js';
+import { startBoss } from './plugins/pgboss.js';
+import { startWebhookRetention } from './jobs/retention.js';
+import { buildApp } from './server.js';
+import { handleWebhookReceived } from './git/sync.js';
+import { Scheduler } from './scheduler/scheduler.js';
+import { startOrphanSweeper } from '@platform/worker-runtime';
+
+/**
+ * Boot path: config → pool → migrations → pg-boss (+ workers) → HTTP → graceful shutdown.
+ */
+async function main(): Promise<void> {
+  const bootAt = (n: string): void => console.log(`[boot] ${n} +${Date.now() - t0}ms`);
+  const t0 = Date.now();
+  // Loud failures for async paths outside the request lifecycle (tickers,
+  // workers): a swallowed rejection must never leave a half-booted process.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[boot] unhandledRejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[boot] uncaughtException:', err);
+    process.exit(1);
+  });
+  const cfg = loadConfig();
+  const pool = createPool(cfg.databaseUrl);
+  bootAt('pool created');
+
+  const applied = await migrate(pool);
+  if (applied.length > 0) console.log(`applied migrations: ${applied.join(', ')}`);
+  bootAt('migrations applied');
+
+  const boss = await startBoss(cfg.pgbossUrl, (err) => console.error('pg-boss error:', err));
+  bootAt('pg-boss started');
+
+  // Reference worker — proves queue round-trip; real workers land in later sections.
+  // pg-boss v12 queues are declarative: without createQueue every poll errors
+  // "Queue does not exist" (968KB of stderr in 37min observed live).
+  try {
+    await boss.inner.createQueue(JOB.exampleCreated);
+  } catch {
+    // already exists
+  }
+  await boss.inner.work(JOB.exampleCreated, async (jobs) => {
+    for (const job of jobs) {
+      console.log(`[worker] ${job.name} received: ${JSON.stringify(job.data)}`);
+    }
+  });
+
+  // S3-D1B consumer for pam's webhook ingress envelope (payload { eventId }):
+  // re-syncs branches/commits/PRs of every repo link matching the delivery's
+  // repository. Safe to run before her producer lands — queue just stays empty.
+  try {
+    await boss.inner.createQueue(JOB.webhookReceived);
+  } catch {
+    // already exists
+  }
+  await boss.inner.work(JOB.webhookReceived, async (jobs) => {
+    for (const job of jobs) {
+      const parsed = webhookReceivedPayload.safeParse(job.data);
+      if (!parsed.success) {
+        console.error('[worker] git.webhook.received: bad payload', JSON.stringify(job.data));
+        continue;
+      }
+      await handleWebhookReceived(pool, parsed.data.eventId, {
+        error: (o, m) => console.error('[worker] git.webhook.received:', m, JSON.stringify(o)),
+      });
+    }
+  });
+  bootAt('worker registered');
+
+  // S3-D2: daily pg-boss job pruning api_webhook_events at WEBHOOK_RETENTION_DAYS.
+  await startWebhookRetention(boss.inner, pool);
+  bootAt('retention scheduled');
+
+  // S4A: workload-class queues, admission control, scheduler workers.
+  const scheduler = new Scheduler({ boss: boss.inner, pool });
+  await scheduler.start();
+  bootAt('scheduler started');
+  bootAt('pre-buildApp');
+  // S4-B: reap leaked worker containers from crashed runs (idempotent, env-tuned).
+  const sweeper = startOrphanSweeper();
+  bootAt('orphan sweeper started');
+
+  const app = await buildApp({ pool, boss: boss.inner, bossStarted: true, scheduler });
+  bootAt('buildApp returned');
+  await app.listen({ port: cfg.port, host: '0.0.0.0' });
+  bootAt('listening');
+
+  let closing = false;
+  const shutdown = async (): Promise<void> => {
+    if (closing) return;
+    closing = true;
+    await app.close();
+    sweeper.stop();
+    scheduler.stop();
+    await boss.stop();
+    await pool.end();
+    process.exit(0);
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}
+
+main().catch((err) => {
+  console.error('fatal boot error:', err);
+  process.exit(1);
+});

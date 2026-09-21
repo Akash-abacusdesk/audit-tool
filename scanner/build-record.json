@@ -1,0 +1,65 @@
+{
+  "$comment": "S4-C build record: derived scanner images built 2026-08-26 from digest-pinned bases (see tools.json). Local IDs are config sha256 (docker image inspect .Id); registry manifest digests populate on push (push pending floor registry decision). Pairing key: profiles.manifest_version at build time.",
+  "manifest_version": 1,
+  "built_at": "2026-08-26",
+  "built_by": "D3-Security",
+  "builder": "docker engine 29.7.2 / buildkit, Windows dev floor",
+  "$note_rebuilds": "wpscan/lynis/zap rebuilt after startup-validation defects (libcurl4 runtime lib, lynis CWD+log paths, zap -dir on scratch); final IDs are the rebuilt images. All 8 pass: docker run --read-only + tmpfs /tmp + network none => version banner, exit 0 (zap logs non-fatal UnknownHost noise offline; needs tmpfs >= ~1g for home init).",
+  "images": [
+    {
+      "tool": "gitleaks",
+      "tag": "devsecops/scanner-gitleaks:v8.18.4",
+      "base": "ghcr.io/gitleaks/gitleaks@sha256:75bdb2b2f4db213cde0b8295f13a88d6b333091bbfbf3012a4e083d00d31caba",
+      "image_id": "sha256:d1164497556715aa18420a32083f0b6ea044466533f07a46df0b6dc1eb018030"
+    },
+    {
+      "tool": "testssl.sh",
+      "tag": "devsecops/scanner-testssl:3.2",
+      "base": "docker.io/drwetter/testssl.sh@sha256:77422209ba0f38bac0c50bebd35961cca57a3ba0b9de9b664ca262936ff88817",
+      "image_id": "sha256:884f881ea7126273f1b167bbcba034e0a8e0323a469fbddcbf51a0dbb9c2257c"
+    },
+    {
+      "tool": "lynis",
+      "tag": "devsecops/scanner-lynis:3.1.1",
+      "base": "docker.io/library/debian@sha256:2ccc7e39b0a6f504d252f807da1fc4b5bcd838e83e4dec3e2f57b2a4a64e7214",
+      "extra_pins": {
+        "tarball": "https://packages.cisofy.com/community/lynis/v3.1.1/lynis-3.1.1.tar.gz",
+        "tarball_sha256": "ca38a27c9c92e78877be4ecffce25f3345a1d24bbcd68be66a3a600e2ff748d1"
+      },
+      "image_id": "sha256:f2fbdb98ff3da2cf2f72286ae4463531914f6f4e450ff0b02f52de934ffb1246"
+    },
+    {
+      "tool": "wpscan",
+      "tag": "devsecops/scanner-wpscan:3.8.28",
+      "base": "docker.io/library/ruby@sha256:0a6e39a193d07f987fe560e027eb214b87ec7e86bebeef44bd8665fbe7388f28",
+      "extra_pins": {
+        "gem": "wpscan-3.8.28"
+      },
+      "image_id": "sha256:58670961f90ff432ac5cf091bdf16efac68ff00a270f94844ff2bfd581322445"
+    },
+    {
+      "tool": "semgrep",
+      "tag": "devsecops/scanner-semgrep:1.86.0",
+      "base": "docker.io/returntocorp/semgrep@sha256:05d24d34abcb88b18610bf9a9731458a4ebadc336383805a63cdf811adfd1bc8",
+      "image_id": "sha256:6ecc55a2a5a546d01a03bcf6ee4b90c4e52cda94585e3d49f1d8dbb7e61596d8"
+    },
+    {
+      "tool": "trivy",
+      "tag": "devsecops/scanner-trivy:0.55.0",
+      "base": "ghcr.io/aquasecurity/trivy@sha256:35e972d4c97895711cb2de6594cc1774b61e6b9dc7661ef73a76dd649f006c8d",
+      "image_id": "sha256:4cec2f068b69cf004b9c6e4b2c52a653448554bbad42de3a6f9468f832433152"
+    },
+    {
+      "tool": "zap",
+      "tag": "devsecops/scanner-zap:2.15.0",
+      "base": "ghcr.io/zaproxy/zaproxy@sha256:8dc78e39fafc3281ac2cf54eab05c3ea02721a1ea58f1c135f981a57f4e218b1",
+      "image_id": "sha256:b4b68e7f5bbd15059171c7bad2bfe3e8d54bd801e25e5148b20c4233a8408e56"
+    },
+    {
+      "tool": "abuse-probe (battery-only, never scheduled)",
+      "tag": "devsecops/scanner-abuse-probe:1.0.0",
+      "base": "docker.io/library/busybox@sha256:7a3ebe5bfd1a4a19797d20b0c0bb39d44393e9a03fd852c0865b0f540d868df0",
+      "image_id": "sha256:71740634b4c013749d4823891fa2bf69d4a666b9c85929c58cfb0cccc5e1b557"
+    }
+  ]
+}

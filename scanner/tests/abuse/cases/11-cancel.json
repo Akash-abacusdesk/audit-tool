@@ -1,0 +1,15 @@
+{
+  "$comment": "S4-C battery: cancel(runId) mid-flight resolves cancelled:true; cancel(unknown-id) idempotent ok.",
+  "id": "cancel-semantics",
+  "threat": "Cancellation contract (scheduler S4-A dependency)",
+  "mechanism": "cancel() SIGTERM -> grace -> SIGKILL, idempotent on unknown ids",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["sleep 60"],
+    "limitsProfile": "small",
+    "cancelAfterMs": 4000,
+    "alsoCancelUnknownId": true,
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "cancelled", "cancelledTrue": true, "maxElapsedMs": 30000 }
+}

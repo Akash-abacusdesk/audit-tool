@@ -1,0 +1,14 @@
+{
+  "$comment": "S4-C battery: read-only rootfs + writable-surface policy. Writes outside /out and scratch tmpfs must fail; /tmp and /out must succeed.",
+  "id": "ro-rootfs-writable-surfaces",
+  "threat": "Persistent filesystem tampering",
+  "mechanism": "rootfs --read-only; writable = /out bind + size-capped tmpfs scratch (/tmp)",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["for p in /etc/passwd /usr/bin/probe-x /workspace/escape; do echo x >> $p 2>/dev/null && echo VIOLATION:$p; done; echo hi > /tmp/w && echo SCRATCH-OK; echo art > /out/a && echo OUT-OK"],
+    "limitsProfile": "small",
+    "workspaceFixture": true,
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "logsContain", "values": ["SCRATCH-OK", "OUT-OK"], "logsForbid": ["VIOLATION"], "status": "completed", "exitCode": 0 }
+}

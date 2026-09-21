@@ -1,0 +1,1 @@
+const API_KEY = 'AKIA1234567890EXAMPLE';\nconst DB_URL = 'postgres://admin:supersecret@db:5432/app';\nfunction run(input){ return eval(input); }\nmodule.exports = { API_KEY, DB_URL, run };\n

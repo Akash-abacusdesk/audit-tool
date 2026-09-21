@@ -1,0 +1,14 @@
+{
+  "$comment": "S4-C battery: /out disk exhaustion. Per god ruling /out is a per-run HOST BIND with du-watchdog kill-on-breach (not tmpfs ENOSPC). Per pam schema note @8f9487b: du-watchdog breach surfaces on the timedOut path (SIGTERM->grace->SIGKILL) => assert timedOut:true + logsTail evidence; artifacts survive teardown in host dir.",
+  "id": "disk-exhaust-watchdog",
+  "threat": "/out disk exhaustion",
+  "mechanism": "du-watchdog polls diskMb budget, terminates run, marks failure",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["dd if=/dev/zero of=/out/blob bs=1M count=512 2>/dev/null; echo wrote-$(du -m /out/blob | cut -f1)MB"],
+    "limitsOverride": { "cpuCores": 1, "memoryMb": 512, "pidsLimit": 128, "diskMb": 64, "timeoutSeconds": 60 },
+    "env": { "WORKER_OUT_DU_POLL_MS_HINT": "runner-level knob set by harness to 1000" },
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "watchdogDiskKill", "statuses": ["timedOut"], "timedOutTrue": true, "maxElapsedMs": 45000, "artifactDirIntact": true }
+}

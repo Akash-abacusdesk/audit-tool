@@ -1,0 +1,7 @@
+title = "vuln-secrets fixture"
+
+[[rules]]
+id = "hardcoded-password"
+description = "Hardcoded password"
+regex = '''hardcoded-password'''
+secretGroup = 0

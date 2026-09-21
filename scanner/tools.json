@@ -1,0 +1,160 @@
+{
+  "$comment": "Pinned security-scanner versions for the DevSecOps control plane. Owner: D3 (dwight). digest_sha256 = manifest-list digest of the immutable base ref declared in tool/scanner/images/<name>/Dockerfile (verified against live registries 2026-08-26); derived worker-image digests get recorded at first packaging build. Never retag in place - rebuilds produce a new tag via PR bump. Bump policy: quarterly review by D3; security-critical bumps ad hoc.",
+  "manifest_version": 2,
+  "updated": "2026-08-26",
+  "owner": "D3-Security",
+  "policy": {
+    "pinning": "exact version tags AND base-image digest pins before any production scan workload",
+    "bump_cadence_days": 90,
+    "never_run_on": ["production website VPSs"]
+  },
+  "tools": [
+    {
+      "name": "semgrep",
+      "category": "sast",
+      "image": "docker.io/returntocorp/semgrep",
+      "version_tag": "1.86.0",
+      "digest_sha256": "sha256:05d24d34abcb88b18610bf9a9731458a4ebadc336383805a63cdf811adfd1bc8",
+      "packaging": {
+        "mode": "upstream-wrapper",
+        "base_tag": "1.86.0-nonroot"
+      },
+      "purpose": "Static analysis of application code (SAST rulesets).",
+      "runs_on": ["ephemeral-worker", "central-vps"],
+      "output_format": "json+sarif",
+      "native_severities": ["ERROR", "WARNING", "INFO"],
+      "refs": ["build-plan L138-139", "PRD L53"]
+    },
+    {
+      "name": "gitleaks",
+      "category": "secrets",
+      "image": "ghcr.io/gitleaks/gitleaks",
+      "version_tag": "v8.18.4",
+      "digest_sha256": "sha256:75bdb2b2f4db213cde0b8295f13a88d6b333091bbfbf3012a4e083d00d31caba",
+      "packaging": {
+        "mode": "upstream-wrapper",
+        "base_tag": "v8.18.4"
+      },
+      "purpose": "Secret/credential detection in repos and diffs.",
+      "runs_on": ["ephemeral-worker", "central-vps"],
+      "output_format": "json+sarif",
+      "native_severities": [],
+      "refs": ["build-plan L69"]
+    },
+    {
+      "name": "trivy",
+      "category": "sca",
+      "image": "ghcr.io/aquasecurity/trivy",
+      "version_tag": "0.55.0",
+      "digest_sha256": "sha256:35e972d4c97895711cb2de6594cc1774b61e6b9dc7661ef73a76dd649f006c8d",
+      "packaging": {
+        "mode": "upstream-wrapper",
+        "base_tag": "0.55.0"
+      },
+      "purpose": "SCA: dependency, container-image and IaC vulnerability scanning.",
+      "runs_on": ["ephemeral-worker", "central-vps"],
+      "output_format": "json+sarif",
+      "native_severities": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"],
+      "refs": ["MICHAEL_Direct_Project_Instructions.md L280"]
+    },
+    {
+      "name": "wpscan",
+      "category": "cms-vuln",
+      "image": null,
+      "version_tag": "3.8.28",
+      "digest_sha256": "sha256:0a6e39a193d07f987fe560e027eb214b87ec7e86bebeef44bd8665fbe7388f28",
+      "packaging": {
+        "mode": "source-build",
+        "base_tag": "ruby:3.1.4-slim-bullseye",
+        "note": "built from ruby base + 'gem install wpscan -v 3.8.28'; no public upstream image exists at this version (hub wpscanteam/wpscan stops at 3.8.18)"
+      },
+      "purpose": "WordPress core/plugin/theme vulnerability correlation from centrally collected version inventory — never heavyweight scanning on live hosts.",
+      "runs_on": ["central-vps"],
+      "output_format": "cli-json",
+      "native_severities": ["alert", "warning", "info"],
+      "refs": ["PRD L94", "PRD L753"]
+    },
+    {
+      "name": "lynis",
+      "category": "host-hardening",
+      "image": null,
+      "version_tag": "3.1.1",
+      "digest_sha256": "sha256:2ccc7e39b0a6f504d252f807da1fc4b5bcd838e83e4dec3e2f57b2a4a64e7214",
+      "packaging": {
+        "mode": "source-build",
+        "base_tag": "debian:bookworm-20240812-slim",
+        "note": "CISOfy release tarball pinned by sha256 in Dockerfile ARG; no public cisofy image registry reachable (hub+ghcr both absent)"
+      },
+      "purpose": "OS/host hardening audit on central/staging hosts under approved maintenance procedures only.",
+      "runs_on": ["central-vps", "ephemeral-worker"],
+      "output_format": "json(log)",
+      "native_severities": ["warning", "suggestion"],
+      "refs": ["PRD L93"]
+    },
+    {
+      "name": "testssl.sh",
+      "category": "tls-posture",
+      "image": "docker.io/drwetter/testssl.sh",
+      "version_tag": "3.2",
+      "digest_sha256": "sha256:77422209ba0f38bac0c50bebd35961cca57a3ba0b9de9b664ca262936ff88817",
+      "packaging": {
+        "mode": "upstream-wrapper",
+        "base_tag": "3.2",
+        "note": "'3.2' is upstream's rolling rc-line tag; the digest pin is the immutability authority here"
+      },
+      "purpose": "External TLS/network posture checks against managed endpoints.",
+      "runs_on": ["central-vps"],
+      "output_format": "json",
+      "native_severities": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "OK", "WARN"],
+      "refs": ["build-plan L69"]
+    },
+    {
+      "name": "zap",
+      "category": "dast-staging",
+      "image": "ghcr.io/zaproxy/zaproxy",
+      "version_tag": "2.15.0",
+      "digest_sha256": "sha256:8dc78e39fafc3281ac2cf54eab05c3ea02721a1ea58f1c135f981a57f4e218b1",
+      "packaging": {
+        "mode": "upstream-wrapper",
+        "base_tag": "2.15.0"
+      },
+      "purpose": "DAST against staging environments only — ZAP staging is explicitly D3-owned; never pointed at production.",
+      "runs_on": ["ephemeral-worker"],
+      "output_format": "zap-json+sarif",
+      "native_severities": ["HIGH", "MEDIUM", "LOW", "INFO"],
+      "refs": ["MICHAEL_Direct_Project_Instructions.md L285"]
+    },
+    {
+      "name": "phpcs-wpcs",
+      "category": "wp-coding-standards",
+      "image": null,
+      "version_tag": "planned-s5",
+      "digest_sha256": null,
+      "packaging": {
+        "mode": "source-build-planned",
+        "note": "will follow the wpscan source-build pattern (composer/composer.lock pin) when introduced in Section 5"
+      },
+      "purpose": "PHP_CodeSniffer + WordPress Coding Standards for WP code review pipeline. Pinned when introduced (build plan Section 5).",
+      "runs_on": ["ephemeral-worker"],
+      "output_format": "checkstyle-json",
+      "native_severities": ["error", "warning"],
+      "refs": ["MICHAEL_Direct_Project_Instructions.md L281"]
+    },
+    {
+      "name": "wp-vuln-intel",
+      "category": "wp-vuln-correlation",
+      "image": null,
+      "version_tag": "1.0.0",
+      "digest_sha256": null,
+      "packaging": {
+        "mode": "in-process-correlation",
+        "note": "internal advisory-correlation engine (rules detector); no container image. Bundles a curated WP vuln advisory fixture; superseded by the live WPScan API when WPSCAN_API_TOKEN is set (see docs/wp-vuln-intel.md)"
+      },
+      "purpose": "Correlate WordPress core/plugin/theme versions (kevin S10-D4 inventory) against WPScan/advisory intelligence; emit CVE findings + fixed-version + update-risk.",
+      "runs_on": ["central-vps"],
+      "output_format": "findingInput[]",
+      "native_severities": ["critical", "high", "medium", "low", "info"],
+      "refs": ["build-plan S10 D3 L830-832"]
+    }
+  ]
+}

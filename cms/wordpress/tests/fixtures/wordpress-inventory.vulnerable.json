@@ -1,0 +1,13 @@
+{
+  "schema_version": "wp-inventory/1.0",
+  "site_id": "site-vuln-01",
+  "collected_at": "2026-08-29T04:00:00Z",
+  "core": { "version": "6.3.1" },
+  "plugins": [
+    { "name": "Elementor", "slug": "elementor", "version": "3.15.3", "active": true },
+    { "name": "WPForms", "slug": "wpforms-lite", "version": "1.7.8", "active": true }
+  ],
+  "themes": [
+    { "name": "Astra", "slug": "astra", "version": "4.1.0", "active": true }
+  ]
+}

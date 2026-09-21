@@ -1,0 +1,1 @@
+# vuln-secrets - deliberately vulnerable fixture for S5 scanner validation (Gitleaks/Semgrep expected findings)\n

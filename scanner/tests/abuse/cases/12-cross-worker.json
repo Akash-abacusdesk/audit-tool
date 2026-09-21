@@ -1,0 +1,19 @@
+{
+  "$comment": "S4-C battery: cross-worker interference - two concurrent runs get distinct platform-wkr-* containers on distinct platform-wnet-* networks, both complete, zero leftovers.",
+  "id": "cross-worker-isolation",
+  "threat": "Cross-worker interference",
+  "mechanism": "unique per-run network + container name; workers share nothing writable",
+  "spec": {
+    "image": "devsecops/scanner-abuse-probe:1.0.0",
+    "cmd": ["sleep 4; echo done-$(id -u)"],
+    "limitsProfile": "small",
+    "concurrency": 2,
+    "midFlightAsserts": {
+      "containersLabeledAtLeast": 2,
+      "networksLabeledAtLeast": 2,
+      "distinctNames": true
+    },
+    "egress": { "mode": "offline" }
+  },
+  "expect": { "kind": "concurrentIsolation", "statuses": ["completed", "completed"], "zeroLeftovers": true }
+}

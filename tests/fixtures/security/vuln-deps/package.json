@@ -1,0 +1,9 @@
+{
+  "name": "vuln-deps-fixtures",
+  "version": "1.0.0",
+  "dependencies": {
+    "lodash": "4.17.15",
+    "minimist": "1.2.5",
+    "express": "4.17.1"
+  }
+}

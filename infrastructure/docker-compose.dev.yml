@@ -1,0 +1,130 @@
+name: platform-dev
+
+networks:
+  devnet:
+    driver: bridge
+
+volumes:
+  pgdata:
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in infra/.env — copy from .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-platform}
+    # Capacity knobs are configurable (capacity-agnostic policy): no fixed sizing.
+    command:
+      - postgres
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-200}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+    ports:
+      # Direct PG on the host for migrations/admin only; apps go through pgbouncer.
+      - "127.0.0.1:${PG_HOST_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform} -d ${POSTGRES_DB:-platform}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    # Log rotation (S1-D2-MONITOR): json-file caps; no extra services.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [devnet]
+    restart: unless-stopped
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-platform}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set in infra/.env — copy from .env.example}
+      DB_NAME: ${POSTGRES_DB:-platform}
+      ADMIN_USERS: ${POSTGRES_USER:-platform},postgres
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      # Pool limits are env-tunable per host (capacity-agnostic).
+      MAX_CLIENT_CONN: ${BOUNCER_MAX_CLIENT_CONN:-2000}
+      DEFAULT_POOL_SIZE: ${BOUNCER_DEFAULT_POOL_SIZE:-200}
+      MIN_POOL_SIZE: ${BOUNCER_MIN_POOL_SIZE:-20}
+      RESERVE_POOL_SIZE: ${BOUNCER_RESERVE_POOL_SIZE:-20}
+      RESERVE_POOL_TIMEOUT: ${BOUNCER_RESERVE_POOL_TIMEOUT:-5}
+      SERVER_RESET_QUERY: DISCARD ALL
+    ports:
+      - "${BOUNCER_BIND:-127.0.0.1}:${BOUNCER_HOST_PORT:-6432}:5432"
+    healthcheck:
+      # ponytail: busybox nc TCP probe; swap for a real auth query if nc is missing in the image at first boot
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5432"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [devnet]
+    restart: unless-stopped
+
+  # One-shot proof that pg-boss boots and round-trips a job through pgbouncer.
+  # Run: docker compose --profile smoke up --build boss-smoke  (exit code 0 = pass)
+  boss-smoke:
+    build: ./boss-smoke
+    profiles: ["smoke"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD}@pgbouncer:5432/${POSTGRES_DB:-platform}?sslmode=disable
+    # One-shot job: success/failure is its exit code (`--exit-code-from boss-smoke`),
+    # so no healthcheck applies; rotation caps keep its output bounded.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [devnet]
+    restart: "no"
+
+  # S2-D2: one-shot audit-export batch into the local encrypted spool.
+  # Run: docker compose --profile audit-export run --rm audit-export
+  # Prod scheduling = host timer (systemd timer / Task Scheduler) — ops/logging.md.
+  audit-export:
+    image: node:22-alpine
+    profiles: ["audit-export"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    command: ["node", "tools/audit-export.mjs"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-platform}?sslmode=disable
+      AUDIT_EXPORT_KEY: ${AUDIT_EXPORT_KEY:?generate with openssl rand -base64 32}
+      AUDIT_EXPORT_SPOOL_DIR: /spool
+      AUDIT_EXPORT_BATCH: ${AUDIT_EXPORT_BATCH:-500}
+      AUDIT_EXPORT_MAX_MB: ${AUDIT_EXPORT_MAX_MB:-100}
+    volumes:
+      # pg driver resolves from apps/api/node_modules; spool lives on the host
+      # so rsync/scp pickup works without container exec.
+      - ../apps/api:/app:ro
+      - ${AUDIT_SPOOL_DIR:-./audit-spool}:/spool
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [devnet]
+    restart: "no"

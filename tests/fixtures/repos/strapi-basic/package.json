@@ -1,0 +1,7 @@
+{
+  "name": "fx-strapi-basic",
+  "private": true,
+  "dependencies": {
+    "@strapi/strapi": "^5.0.0"
+  }
+}

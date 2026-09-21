@@ -1,0 +1,7 @@
+{
+  "name": "fx-payload-basic",
+  "private": true,
+  "dependencies": {
+    "payload": "^3.0.0"
+  }
+}
