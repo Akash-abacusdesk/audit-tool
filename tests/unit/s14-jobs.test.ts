@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PgBoss } from 'pg-boss';
-import { DeepAuditQueue, DeepAuditStore } from '../../apps/api/src/deep-audit/queue.js';
+import { DeepAuditQueue, InMemoryDeepAuditStore } from '../../apps/api/src/deep-audit/queue.js';
 import { createMockAdapters, DEEP_AUDIT_STAGES } from '@platform/shared';
 
 const TARGET = {
@@ -26,7 +26,7 @@ function fakeBoss() {
 describe('S14-D3 scanner pg-boss job dispatch order', () => {
   it('enqueues ONLY the first stage — each stage chains to the next on completion', async () => {
     const { boss, sent } = fakeBoss();
-    const store = new DeepAuditStore();
+    const store = new InMemoryDeepAuditStore();
     const queue = new DeepAuditQueue(boss, store);
 
     const ids = await queue.enqueuePipeline('audit-q', TARGET as any);
@@ -45,10 +45,10 @@ describe('S14-D3 scanner pg-boss job dispatch order', () => {
 describe('S14-D3 handleStageJob: true per-stage execution + chaining', () => {
   it('runs exactly one stage per call and self-enqueues the next, in order, until the last', async () => {
     const { boss, sent } = fakeBoss();
-    const store = new DeepAuditStore();
+    const store = new InMemoryDeepAuditStore();
     // Mock adapters throughout — this test exercises chaining/persistence, not tool execution.
     const queue = new DeepAuditQueue(boss, store, createMockAdapters());
-    const auditId = store.create(TARGET as any);
+    const auditId = await store.create(TARGET as any);
 
     let stage = DEEP_AUDIT_STAGES[0]!;
     const order: string[] = [];
@@ -56,7 +56,7 @@ describe('S14-D3 handleStageJob: true per-stage execution + chaining', () => {
       const result = await queue.handleStageJob({ auditId, stage, target: TARGET as any });
       order.push(stage);
       expect(result.done).toBe(i === DEEP_AUDIT_STAGES.length - 1);
-      const entry = store.get(auditId)!;
+      const entry = (await store.get(auditId))!;
       expect(entry.state!.stages[i]!.status).toBe('done');
       if (!result.done) {
         stage = sent[sent.length - 1].stage;
@@ -66,14 +66,14 @@ describe('S14-D3 handleStageJob: true per-stage execution + chaining', () => {
     expect(order).toEqual([...DEEP_AUDIT_STAGES]);
     // pipeline self-enqueued 6 follow-on jobs (not the 7th, which is terminal).
     expect(sent.length).toBe(DEEP_AUDIT_STAGES.length - 1);
-    expect(store.get(auditId)!.report).not.toBeNull();
+    expect((await store.get(auditId))!.report).not.toBeNull();
   });
 
   it('is idempotent on redelivery of an already-completed stage (no duplicate enqueue)', async () => {
     const { boss, sent } = fakeBoss();
-    const store = new DeepAuditStore();
+    const store = new InMemoryDeepAuditStore();
     const queue = new DeepAuditQueue(boss, store, createMockAdapters());
-    const auditId = store.create(TARGET as any);
+    const auditId = await store.create(TARGET as any);
     const first = DEEP_AUDIT_STAGES[0]!;
 
     await queue.handleStageJob({ auditId, stage: first, target: TARGET as any });
@@ -86,7 +86,7 @@ describe('S14-D3 handleStageJob: true per-stage execution + chaining', () => {
 
   it('throws NOT_FOUND-shaped error for an unknown audit id', async () => {
     const { boss } = fakeBoss();
-    const store = new DeepAuditStore();
+    const store = new InMemoryDeepAuditStore();
     const queue = new DeepAuditQueue(boss, store, createMockAdapters());
     await expect(
       queue.handleStageJob({ auditId: 'nope', stage: DEEP_AUDIT_STAGES[0]!, target: TARGET as any })

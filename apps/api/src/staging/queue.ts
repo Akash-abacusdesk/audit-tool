@@ -17,6 +17,7 @@ import {
   stagingProvisionPayload,
   stagingTestRunPayload,
   transitionStaging,
+  type StagingEvent,
   type StagingSafetyContext,
   type StagingState,
 } from '@platform/shared';
@@ -30,11 +31,18 @@ export interface StagingStoreEntry {
   createdAt: string;
 }
 
-/** In-memory staging store (swap for PG when promotion past CI mocks). */
-export class StagingStore {
+export interface StagingStore {
+  create(projectId: string, environmentId: string, ref: string): Promise<string>;
+  get(id: string): Promise<StagingStoreEntry | null>;
+  /** Apply a lifecycle event to a known staging id; throws on unknown id/illegal transition. */
+  apply(id: string, event: StagingEvent): Promise<StagingState>;
+}
+
+/** In-memory staging store — test/dev fallback. Production uses PgStagingStore (staging/pg-store.ts). */
+export class InMemoryStagingStore implements StagingStore {
   private readonly runs = new Map<string, StagingStoreEntry>();
 
-  create(projectId: string, environmentId: string, ref: string): string {
+  async create(projectId: string, environmentId: string, ref: string): Promise<string> {
     const id = randomUUID();
     this.runs.set(id, {
       id,
@@ -47,12 +55,11 @@ export class StagingStore {
     return id;
   }
 
-  get(id: string): StagingStoreEntry | null {
+  async get(id: string): Promise<StagingStoreEntry | null> {
     return this.runs.get(id) ?? null;
   }
 
-  /** Apply a lifecycle event to a known staging id; throws on unknown/idle state. */
-  apply(id: string, event: Parameters<typeof transitionStaging>[1]): StagingState {
+  async apply(id: string, event: StagingEvent): Promise<StagingState> {
     const e = this.runs.get(id);
     if (!e) throw new ApiError('NOT_FOUND', `staging ${id} not found`);
     e.state = transitionStaging(e.state, event);
@@ -77,8 +84,8 @@ export class StagingOrchestrator {
     environmentId: string,
     ref: string
   ): Promise<{ stagingId: string; jobId: string | null }> {
-    const stagingId = this.store.create(projectId, environmentId, ref);
-    this.store.apply(stagingId, 'provision'); // requested -> provisioning
+    const stagingId = await this.store.create(projectId, environmentId, ref);
+    await this.store.apply(stagingId, 'provision'); // requested -> provisioning
     const jobId = await this.boss.send(
       JOB.stagingProvision,
       stagingProvisionPayload.parse({ stagingId, projectId, environmentId, ref })
@@ -95,7 +102,7 @@ export class StagingOrchestrator {
     suite: 'smoke' | 'functional' | 'visual',
     safety: StagingSafetyContext
   ): Promise<{ jobId: string | null }> {
-    const entry = this.store.get(stagingId);
+    const entry = await this.store.get(stagingId);
     if (!entry) throw new ApiError('NOT_FOUND', `staging ${stagingId} not found`);
     if (entry.state !== 'ready') {
       throw new ApiError('FORBIDDEN', `staging ${stagingId} is not ready (state=${entry.state})`);
@@ -110,9 +117,9 @@ export class StagingOrchestrator {
 
   /** Tear down the staging environment. */
   async destroy(stagingId: string): Promise<{ jobId: string | null }> {
-    const entry = this.store.get(stagingId);
+    const entry = await this.store.get(stagingId);
     if (!entry) throw new ApiError('NOT_FOUND', `staging ${stagingId} not found`);
-    this.store.apply(stagingId, 'destroy'); // ready -> destroying
+    await this.store.apply(stagingId, 'destroy'); // ready -> destroying
     const jobId = await this.boss.send(
       JOB.stagingDestroy,
       stagingDestroyPayload.parse({ stagingId })
@@ -121,13 +128,13 @@ export class StagingOrchestrator {
   }
 
   // Called by the provision worker on outcome.
-  markProvisioned(stagingId: string): StagingState {
+  async markProvisioned(stagingId: string): Promise<StagingState> {
     return this.store.apply(stagingId, 'provisioned');
   }
-  markProvisionFailed(stagingId: string): StagingState {
+  async markProvisionFailed(stagingId: string): Promise<StagingState> {
     return this.store.apply(stagingId, 'provision_failed');
   }
-  markDestroyed(stagingId: string): StagingState {
+  async markDestroyed(stagingId: string): Promise<StagingState> {
     return this.store.apply(stagingId, 'destroyed');
   }
 }

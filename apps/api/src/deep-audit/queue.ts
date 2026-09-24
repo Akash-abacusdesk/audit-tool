@@ -33,11 +33,6 @@ function liveAdapters(): Record<DeepAuditStage, DeepAuditStageAdapter> {
   };
 }
 
-/**
- * In-memory deep-audit run store (D1 common persistence/state).
- * ponytail: swap for a PG table (api_deep_audit_runs) when the pipeline is
- * promoted past CI-deferred mock execution; the interface is the contract.
- */
 export interface DeepAuditStoreEntry {
   id: string;
   target: DeepAuditTarget;
@@ -46,10 +41,17 @@ export interface DeepAuditStoreEntry {
   createdAt: string;
 }
 
-export class DeepAuditStore {
+export interface DeepAuditStore {
+  create(target: DeepAuditTarget): Promise<string>;
+  get(id: string): Promise<DeepAuditStoreEntry | null>;
+  setResult(id: string, state: DeepAuditRunState): Promise<void>;
+}
+
+/** In-memory deep-audit run store — test/dev fallback. Production uses PgDeepAuditStore (deep-audit/pg-store.ts). */
+export class InMemoryDeepAuditStore implements DeepAuditStore {
   private readonly runs = new Map<string, DeepAuditStoreEntry>();
 
-  create(target: DeepAuditTarget): string {
+  async create(target: DeepAuditTarget): Promise<string> {
     const id = randomUUID();
     this.runs.set(id, {
       id,
@@ -61,11 +63,11 @@ export class DeepAuditStore {
     return id;
   }
 
-  get(id: string): DeepAuditStoreEntry | null {
+  async get(id: string): Promise<DeepAuditStoreEntry | null> {
     return this.runs.get(id) ?? null;
   }
 
-  setResult(id: string, state: DeepAuditRunState): void {
+  async setResult(id: string, state: DeepAuditRunState): Promise<void> {
     const e = this.runs.get(id);
     if (!e) return;
     e.state = state;
@@ -115,7 +117,7 @@ export class DeepAuditQueue {
     stage: DeepAuditStage;
     target: DeepAuditTarget;
   }): Promise<{ stage: DeepAuditStage; done: boolean }> {
-    const entry = this.store.get(payload.auditId);
+    const entry = await this.store.get(payload.auditId);
     if (!entry) throw new Error(`deep-audit run ${payload.auditId} not found`);
 
     const orch = new DeepAuditOrchestrator({ adapters: this.adapters });
@@ -125,7 +127,7 @@ export class DeepAuditQueue {
     // next stage was already enqueued the first time — never enqueue twice.
     const alreadyDone = state.stages[i]!.status === 'done';
     const updated = await orch.runStage(state, payload.stage);
-    this.store.setResult(payload.auditId, updated);
+    await this.store.setResult(payload.auditId, updated);
 
     const isLast = i === DEEP_AUDIT_STAGES.length - 1;
     if (!isLast && !alreadyDone) {

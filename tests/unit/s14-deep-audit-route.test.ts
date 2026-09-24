@@ -1,18 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import Fastify from 'fastify';
-import {
-  deepAuditRoutes,
-  deepAuditStore,
-} from '../../apps/api/src/routes/deep-audit.js';
+import { deepAuditRoutes } from '../../apps/api/src/routes/deep-audit.js';
 import { fail, toApiError, type DeepAuditTarget } from '@platform/shared';
 
 vi.mock('../../apps/api/src/deep-audit/queue.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../apps/api/src/deep-audit/queue.js')>();
   const sent: any[] = [];
   return {
-    // Real DeepAuditStore: route tests below manipulate deepAuditStore.runs
-    // directly, so only the pg-boss-touching queue needs a fake.
+    // Real store classes: route tests below exercise the real api_deep_audit_runs
+    // round trip through a stateful fake pool; only the pg-boss-touching queue is faked.
     ...actual,
     DeepAuditQueue: class {
       constructor() {}
@@ -28,8 +26,10 @@ const ORG = '11111111-1111-4111-8111-111111111111';
 const PROJECT = '22222222-2222-4222-8222-222222222222';
 const ENV = '33333333-3333-4333-8333-333333333333';
 
+/** Minimal stateful fake of api_deep_audit_runs behind a real Pool shape. */
 function makePool(role = 'manager') {
   const auditCalls: unknown[][] = [];
+  const runs = new Map<string, { id: string; target: unknown; state: unknown; report: unknown; created_at: Date }>();
   const pool = {
     query: async (sql: string, params?: unknown[]) => {
       if (sql.includes('api_sessions')) {
@@ -42,14 +42,34 @@ function makePool(role = 'manager') {
         auditCalls.push(params ?? []);
         return { rows: [], rowCount: 1 };
       }
+      if (sql.startsWith('INSERT INTO api_deep_audit_runs')) {
+        const id = randomUUID();
+        const [target] = params as [string];
+        runs.set(id, { id, target: JSON.parse(target), state: null, report: null, created_at: new Date() });
+        return { rows: [{ id }], rowCount: 1 };
+      }
+      if (sql.startsWith('SELECT id, target, state, report')) {
+        const [id] = params as [string];
+        const r = runs.get(id);
+        return { rows: r ? [r] : [], rowCount: r ? 1 : 0 };
+      }
+      if (sql.startsWith('UPDATE api_deep_audit_runs')) {
+        const [id, state, report] = params as [string, string, string];
+        const r = runs.get(id);
+        if (r) {
+          r.state = JSON.parse(state);
+          r.report = JSON.parse(report);
+        }
+        return { rows: [], rowCount: r ? 1 : 0 };
+      }
       return { rows: [], rowCount: 0 };
     },
   } as unknown as Pool;
-  return { pool, auditCalls };
+  return { pool, auditCalls, runs };
 }
 
 async function buildApp(role = 'manager') {
-  const { pool, auditCalls } = makePool(role);
+  const { pool, auditCalls, runs } = makePool(role);
   const boss = { send: vi.fn(async () => 'job-x') } as any;
   const app = Fastify({ logger: false, genReqId: (r) => (typeof r.headers['x-request-id'] === 'string' ? r.headers['x-request-id'] : 'fallback') });
   app.decorate('pool', pool);
@@ -59,18 +79,13 @@ async function buildApp(role = 'manager') {
   });
   await app.register(deepAuditRoutes, { prefix: '/api/v1', pool, boss });
   await app.ready();
-  return { app, auditCalls };
+  return { app, auditCalls, pool, runs };
 }
 
 const headers = { authorization: 'Bearer tok', 'x-request-id': 'req-1', 'content-type': 'application/json' };
 const stagingBody = { projectId: PROJECT, environmentId: ENV, environment: 'staging', ref: 'main', isolatedEnv: true };
 
 describe('S14-D3 deep-audit routes', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    (deepAuditStore as any).runs.clear();
-  });
-
   it('POST /run enqueues a 7-stage pipeline for a staging target (202)', async () => {
     const { app, auditCalls } = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/api/v1/deep-audit/run', headers, payload: JSON.stringify(stagingBody) });
@@ -106,16 +121,22 @@ describe('S14-D3 deep-audit routes', () => {
   });
 
   it('GET /:id returns the report once a run completes', async () => {
-    const { app } = await buildApp();
-    const run = deepAuditStore.create(stagingBody as any);
-    (deepAuditStore as any).runs.get(run).report = {
-      id: run,
+    const { app, runs } = await buildApp();
+    const id = randomUUID();
+    runs.set(id, {
+      id,
       target: stagingBody,
-      severityCounts: { critical: 1, high: 0, medium: 0, low: 0, info: 0, total: 1 },
-      stageStatus: {},
-      findings: [],
-    };
-    const res = await app.inject({ method: 'GET', url: `/api/v1/deep-audit/${run}`, headers });
+      state: null,
+      report: {
+        id,
+        target: stagingBody,
+        severityCounts: { critical: 1, high: 0, medium: 0, low: 0, info: 0, total: 1 },
+        stageStatus: {},
+        findings: [],
+      },
+      created_at: new Date(),
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/v1/deep-audit/${id}`, headers });
     expect(res.statusCode).toBe(200);
     expect(res.json().data.severityCounts.total).toBe(1);
   });

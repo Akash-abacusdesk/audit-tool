@@ -10,18 +10,20 @@ import {
 } from '@platform/shared';
 import { recordAudit } from '../auth/audit.js';
 import { requirePermission } from '../auth/service.js';
-import { DeepAuditQueue, DeepAuditStore } from '../deep-audit/queue.js';
+import { DeepAuditQueue, InMemoryDeepAuditStore, type DeepAuditStore } from '../deep-audit/queue.js';
+import { PgDeepAuditStore } from '../deep-audit/pg-store.js';
 
 interface Deps {
   pool: import('pg').Pool;
   boss: PgBoss;
 }
 
-/** Shared in-memory run store (D1). Swap for PG when promoted past CI mocks. */
-export const deepAuditStore = new DeepAuditStore();
+/** Durable deep-audit run store, api_deep_audit_runs (migration 009). Bound to a real pool on route registration. */
+export let deepAuditStore: DeepAuditStore = new InMemoryDeepAuditStore();
 
 export async function deepAuditRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   console.log('[boot] plugin:deep-audit enter');
+  deepAuditStore = new PgDeepAuditStore(deps.pool);
 
   // ---- Enqueue the serialized 7-stage pipeline (refuses production) ----
   app.post(
@@ -38,7 +40,7 @@ export async function deepAuditRoutes(app: FastifyInstance, deps: Deps): Promise
         throw new ApiError('VALIDATION_ERROR', 'deep-audit may not target a production environment');
       }
 
-      const auditId = deepAuditStore.create(target);
+      const auditId = await deepAuditStore.create(target);
       const queue = new DeepAuditQueue(deps.boss, deepAuditStore);
       // enqueuePipeline dispatches only the first stage; each stage chains to
       // the next itself (queue.ts) — the pipeline still runs all 7 in order.
@@ -67,7 +69,7 @@ export async function deepAuditRoutes(app: FastifyInstance, deps: Deps): Promise
     { preHandler: requirePermission('audit.deep') },
     async (req) => {
       const { id } = req.params as { id: string };
-      const entry = deepAuditStore.get(id);
+      const entry = await deepAuditStore.get(id);
       if (!entry) throw new ApiError('NOT_FOUND', `deep-audit run ${id} not found`);
       if (!entry.report) return ok({ auditId: id, status: 'queued' });
       return ok(entry.report);

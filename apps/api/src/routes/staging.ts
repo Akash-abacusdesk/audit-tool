@@ -3,15 +3,16 @@ import type { PgBoss } from 'pg-boss';
 import { ApiError, ok, type StagingSafetyContext } from '@platform/shared';
 import { requirePermission } from '../auth/service.js';
 import { recordAudit } from '../auth/audit.js';
-import { StagingOrchestrator, StagingStore } from '../staging/queue.js';
+import { InMemoryStagingStore, StagingOrchestrator, type StagingStore } from '../staging/queue.js';
+import { PgStagingStore } from '../staging/pg-store.js';
 
 interface Deps {
   pool: import('pg').Pool;
   boss: PgBoss;
 }
 
-/** Shared in-memory staging store (D1). Swap for PG when promoted past CI mocks. */
-export const stagingStore = new StagingStore();
+/** Durable staging run store, api_staging_runs (migration 009). Bound to a real pool on route registration. */
+export let stagingStore: StagingStore = new InMemoryStagingStore();
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,6 +25,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 export async function stagingRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   console.log('[boot] plugin:staging enter');
+  stagingStore = new PgStagingStore(deps.pool);
   const orchestrator = new StagingOrchestrator(deps.boss, stagingStore);
 
   app.post('/staging', { preHandler: requirePermission('staging.manage') }, async (req, reply) => {
@@ -98,7 +100,7 @@ export async function stagingRoutes(app: FastifyInstance, deps: Deps): Promise<v
 
   app.get('/staging/:id', { preHandler: requirePermission('staging.manage') }, async (req) => {
     const { id } = req.params as { id: string };
-    const entry = stagingStore.get(id);
+    const entry = await stagingStore.get(id);
     if (!entry) throw new ApiError('NOT_FOUND', `staging ${id} not found`);
     return ok(entry);
   });
