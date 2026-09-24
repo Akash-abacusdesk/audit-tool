@@ -14,15 +14,28 @@ const TABLE: Record<string, Severity> = {
   DEBUG: 'info',
 };
 
-interface TestsslFinding {
+interface TestsslCheck {
   id?: string;
-  ip?: string;
-  port?: string;
   severity?: string;
   finding?: string;
   cve?: string;
   cwe?: string;
 }
+
+/**
+ * `--jsonfile-pretty` groups checks by category under each scanned target,
+ * not as one flat list: `{ scanResult: [{ targetHost, ip, port, protocols:
+ * [...], ciphers: [...], vulnerabilities: [...], ... }] }`. Every category
+ * array shares the same {id, severity, finding, cve?, cwe?} check shape, so
+ * they flatten uniformly — this is real testssl.sh 3.2 output, not a guess.
+ */
+interface TestsslTarget {
+  ip?: string;
+  port?: string;
+  [category: string]: unknown;
+}
+
+const NON_CHECK_KEYS = new Set(['targetHost', 'ip', 'port', 'rDNS', 'service']);
 
 /**
  * Every scan run emits an 'OK'/'INFO' row per check even when nothing is
@@ -32,25 +45,31 @@ interface TestsslFinding {
 const NOISE_SEVERITIES = new Set(['OK', 'INFO', 'DEBUG']);
 
 export const normalizeTestssl = (raw: unknown, ctx: AdapterContext): FindingInput[] => {
-  const rows = (Array.isArray(raw) ? raw : []) as TestsslFinding[];
-  return rows
-    .filter((r) => r.severity && !NOISE_SEVERITIES.has(r.severity.toUpperCase()))
-    .map((r) => {
-      const location = { path: r.ip ? `${r.ip}:${r.port ?? ''}` : undefined };
-      const severity = mapSeverity(r.severity, TABLE, 'info');
-      return {
-        finding_fingerprint: makeFingerprint(ctx.tool, r.id, ctx.target.ref, location),
-        rule_id: r.id,
-        title: r.id ? `TLS ${r.id}` : 'testssl-finding',
-        description: r.finding,
-        severity,
-        native_severity: r.severity,
-        confidence: 'firm',
-        location,
-        cve_ids: r.cve ? r.cve.split(/\s+/).filter((c) => c.startsWith('CVE-')) : undefined,
-        metadata: { cwe: r.cwe },
-      } satisfies FindingInput;
-    });
+  const doc = raw as { scanResult?: TestsslTarget[] };
+  const out: FindingInput[] = [];
+  for (const t of doc.scanResult ?? []) {
+    const location = { path: t.ip ? `${t.ip}:${t.port ?? ''}` : undefined };
+    for (const [key, value] of Object.entries(t)) {
+      if (NON_CHECK_KEYS.has(key) || !Array.isArray(value)) continue;
+      for (const r of value as TestsslCheck[]) {
+        if (!r.severity || NOISE_SEVERITIES.has(r.severity.toUpperCase())) continue;
+        const severity = mapSeverity(r.severity, TABLE, 'info');
+        out.push({
+          finding_fingerprint: makeFingerprint(ctx.tool, r.id, ctx.target.ref, location),
+          rule_id: r.id,
+          title: r.id ? `TLS ${r.id}` : 'testssl-finding',
+          description: r.finding,
+          severity,
+          native_severity: r.severity,
+          confidence: 'firm',
+          location,
+          cve_ids: r.cve ? r.cve.split(/\s+/).filter((c) => c.startsWith('CVE-')) : undefined,
+          metadata: { cwe: r.cwe, category: key },
+        } satisfies FindingInput);
+      }
+    }
+  }
+  return out;
 };
 
 export const testssl: Adapter = normalizeTestssl;

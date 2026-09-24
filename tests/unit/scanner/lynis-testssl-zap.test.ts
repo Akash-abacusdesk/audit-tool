@@ -12,24 +12,42 @@ const ctx = (tool: string): AdapterContext => ({
 const FP_RE = /^[0-9a-f]{64}$/;
 
 describe('testssl.sh adapter', () => {
-  const raw = [
-    { id: 'TLS1', severity: 'HIGH', finding: 'TLS 1.0 offered', ip: '10.0.0.1', port: '443' },
-    { id: 'cert_expiry', severity: 'MEDIUM', finding: 'expires in 20 days', ip: '10.0.0.1', port: '443' },
-    { id: 'cert_chain', severity: 'OK', finding: 'chain valid', ip: '10.0.0.1', port: '443' },
-    { id: 'heartbleed', severity: 'CRITICAL', finding: 'VULNERABLE (CVE-2014-0160)', ip: '10.0.0.1', port: '443', cve: 'CVE-2014-0160' },
-  ];
+  // Real shape from a live `--jsonfile-pretty` run (testssl.sh 3.2, verified
+  // against devsecops/scanner-testssl:3.2 this session): checks are grouped
+  // by category under scanResult[], not a flat top-level array.
+  const raw = {
+    scanResult: [
+      {
+        targetHost: 'example.com',
+        ip: '10.0.0.1',
+        port: '443',
+        protocols: [
+          { id: 'TLS1', severity: 'LOW', finding: 'offered (deprecated)' },
+          { id: 'TLS1_2', severity: 'OK', finding: 'offered' },
+        ],
+        vulnerabilities: [
+          { id: 'heartbleed', severity: 'HIGH', cve: 'CVE-2014-0160', cwe: 'CWE-119', finding: 'VULNERABLE' },
+          { id: 'CCS', severity: 'OK', cve: 'CVE-2014-0224', finding: 'not vulnerable' },
+        ],
+        rating: [{ id: 'rating_spec', severity: 'INFO', finding: 'SSL Labs rating guide' }],
+      },
+    ],
+  };
 
-  it('drops OK/INFO rows as clean-check noise', () => {
+  it('flattens every category array and drops OK/INFO rows as clean-check noise', () => {
     const findings = normalizeTestssl(raw, ctx('testssl.sh'));
-    expect(findings.some((f) => f.rule_id === 'cert_chain')).toBe(false);
-    expect(findings.length).toBe(3);
+    expect(findings.some((f) => f.rule_id === 'CCS')).toBe(false);
+    expect(findings.some((f) => f.rule_id === 'rating_spec')).toBe(false);
+    expect(findings.length).toBe(2); // TLS1 (protocols) + heartbleed (vulnerabilities)
   });
 
-  it('maps native severities and extracts CVE ids', () => {
+  it('maps native severities, extracts CVE ids, and tags the source category', () => {
     const findings = normalizeTestssl(raw, ctx('testssl.sh'));
     const heartbleed = findings.find((f) => f.rule_id === 'heartbleed')!;
-    expect(heartbleed.severity).toBe('critical');
+    expect(heartbleed.severity).toBe('high');
     expect(heartbleed.cve_ids).toEqual(['CVE-2014-0160']);
+    expect(heartbleed.metadata?.category).toBe('vulnerabilities');
+    expect(heartbleed.location?.path).toBe('10.0.0.1:443');
     expect(FP_RE.test(heartbleed.finding_fingerprint)).toBe(true);
   });
 });
