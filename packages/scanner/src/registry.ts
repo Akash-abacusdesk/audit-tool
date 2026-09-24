@@ -10,6 +10,7 @@ import { normalizePhpcs } from './adapters/phpcs.js';
 import { normalizeTestssl } from './adapters/testssl.js';
 import { normalizeLynis } from './adapters/lynis.js';
 import { normalizeZap } from './adapters/zap.js';
+import { normalizeClamav } from './adapters/clamav.js';
 import { detectCrossStack } from './detectors/crossstack.js';
 import { detectWpVulnIntelligence } from './detectors/wpVulnIntel.js';
 
@@ -156,6 +157,23 @@ export const REGISTRY: Record<string, ScannerDef> = {
         if (!targetUrl) throw new Error('zap requires req.targetUrl (a staging URL, never production)');
         return ['-cmd', '-quickurl', targetUrl, '-quickout', `/out/${o}`, '-quickprogress'];
       },
+    },
+  },
+  // S14 artifact-malware: scans the mounted workspace/artifact tree. The
+  // image's entrypoint always exits 0 (clamscan exits non-zero on a FOUND
+  // hit, which worker-runtime would otherwise treat as a run failure) — the
+  // FOUND/OK signal lives entirely in stdout text. Verified against a live
+  // devsecops/scanner-clamav run this session (Eicar-Test-Signature FOUND).
+  clamav: {
+    adapter: normalizeClamav,
+    invocation: {
+      kind: 'image',
+      profile: 'medium',
+      outFile: 'clamav.log', // unused (readFrom: 'stdout'); required by the type
+      egress: 'offline', // signature DB is baked into the image, no freshclam pull needed
+      readFrom: 'stdout',
+      format: 'text',
+      cmd: () => ['-r', '/workspace'],
     },
   },
   // S6-D3: generic cross-stack detection rules (internal detector, not a binary).

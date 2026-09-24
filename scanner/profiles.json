@@ -34,6 +34,7 @@
     "testssl.sh": "small",
     "lynis": "small",
     "wpscan": "medium",
+    "clamav": "medium",
     "semgrep": "medium",
     "trivy": "large",
     "zap": "large"

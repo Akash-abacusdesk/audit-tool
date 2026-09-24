@@ -11,19 +11,25 @@ import {
   type DeepAuditTarget,
   DEEP_AUDIT_STAGES,
 } from '@platform/shared';
-import { RealCodeSastAdapter, RealHostLynisAdapter, RealTlsNetworkAdapter, RealStagingZapAdapter } from './real-adapters.js';
+import {
+  RealCodeSastAdapter,
+  RealCmsAdvisoryAdapter,
+  RealHostLynisAdapter,
+  RealTlsNetworkAdapter,
+  RealStagingZapAdapter,
+  RealArtifactMalwareAdapter,
+} from './real-adapters.js';
 
-/**
- * Live adapter set: real tool execution where available, mock elsewhere
- * (cms-advisory, artifact-malware — no scanner image in this repo yet).
- */
+/** Live adapter set: all 7 stages real (normalize itself has no live-tool version — the mock's dedup/prioritization logic IS the real logic). */
 function liveAdapters(): Record<DeepAuditStage, DeepAuditStageAdapter> {
   return {
     ...createMockAdapters(),
     'code-sast': new RealCodeSastAdapter(),
+    'cms-advisory': new RealCmsAdvisoryAdapter(),
     'host-lynis': new RealHostLynisAdapter(),
     'tls-network': new RealTlsNetworkAdapter(),
     'staging-zap': new RealStagingZapAdapter(),
+    'artifact-malware': new RealArtifactMalwareAdapter(),
   };
 }
 

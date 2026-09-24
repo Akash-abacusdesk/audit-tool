@@ -125,6 +125,23 @@
       "refs": ["MICHAEL_Direct_Project_Instructions.md L285"]
     },
     {
+      "name": "clamav",
+      "category": "malware",
+      "image": "docker.io/clamav/clamav",
+      "version_tag": "stable",
+      "digest_sha256": "sha256:0e31ce089574268aefa0b543767d66b70240ab51ed49eec53e07f18d5629d817",
+      "packaging": {
+        "mode": "upstream-wrapper",
+        "base_tag": "stable",
+        "note": "signature DB (main.cvd/daily.cvd) is baked into the base image; no freshclam network pull at scan time"
+      },
+      "purpose": "Artifact/malware scanning of scanned workspaces (S14 artifact-malware) — heavy, isolated stage only.",
+      "runs_on": ["ephemeral-worker"],
+      "output_format": "cli-text",
+      "native_severities": [],
+      "refs": ["PRD deep-audit stage 6"]
+    },
+    {
       "name": "phpcs-wpcs",
       "category": "wp-coding-standards",
       "image": null,

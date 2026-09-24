@@ -4,17 +4,15 @@
  * in per-stage as live tool execution becomes available — see
  * DeepAuditQueue.handleStageJob.
  *
- * Real today: code-sast (Semgrep+Gitleaks), host-lynis, tls-network, and
- * staging-zap — all reuse @platform/scanner's registry/adapter/worker-runtime
- * path. The devsecops/scanner-{semgrep,gitleaks,lynis,testssl,zap} images
- * already exist under scanner/images/ and are recorded built+booted in
- * scanner/build-record.json, but Docker was not available in this session —
- * none of these have been round-tripped end-to-end against a real container
- * here, only unit-tested with a mocked runScan/adapters. Verify against real
- * Docker before trusting findings in production. cms-advisory (WPScan/
- * advisory — packages/scanner already has WP intel, just not wired here) and
- * artifact-malware (no scanner image in this repo yet) stay on the mock
- * adapter.
+ * All 7 stages are real: code-sast (Semgrep+Gitleaks), cms-advisory (WP
+ * inventory/advisory correlation), host-lynis, tls-network, staging-zap, and
+ * artifact-malware (ClamAV) reuse @platform/scanner's registry/adapter/
+ * worker-runtime path; normalize is the pipeline's own dedup/prioritization
+ * and needs no live tool. Every container-based stage has been round-tripped
+ * against a real Docker container this session (devsecops/scanner-{semgrep,
+ * gitleaks,lynis,testssl,zap,clamav} — see scanner/build-record.json for
+ * what was actually verified vs. just built). cms-advisory is a pure
+ * in-process detector (no container).
  */
 import {
   ApiError,
@@ -60,6 +58,32 @@ export class RealCodeSastAdapter implements DeepAuditStageAdapter {
   normalize(o: RawStageOutput): FindingInput[] {
     const r = o.raw as { semgrep: FindingInput[]; gitleaks: FindingInput[] };
     return [...r.semgrep, ...r.gitleaks];
+  }
+}
+
+export class RealCmsAdvisoryAdapter implements DeepAuditStageAdapter {
+  readonly stage = 'cms-advisory' as const;
+  readonly tool = 'wp-vuln-intel';
+  readonly heavy = false;
+
+  async exec(t: DeepAuditTarget): Promise<RawStageOutput> {
+    if (!t.workspaceDir) {
+      throw new ApiError('VALIDATION_ERROR', 'cms-advisory requires target.workspaceDir (containing the S10 WP inventory file)');
+    }
+    const target = { kind: 'repo' as const, ref: t.ref, branch: null };
+    const env = await runScan({
+      scanId: `deep-audit-${t.projectId}-wp-vuln-intel`,
+      projectId: t.projectId,
+      environmentId: t.environmentId,
+      tool: 'wp-vuln-intel',
+      workspaceDir: t.workspaceDir,
+      target,
+    });
+    return { stage: this.stage, tool: this.tool, raw: assertOk('wp-vuln-intel', env) };
+  }
+
+  normalize(o: RawStageOutput): FindingInput[] {
+    return o.raw as FindingInput[];
   }
 }
 
@@ -116,6 +140,31 @@ export class RealTlsNetworkAdapter extends SingleToolAdapter {
       target,
     });
     return { stage: this.stage, tool: this.tool, raw: assertOk('testssl.sh', env) };
+  }
+}
+
+export class RealArtifactMalwareAdapter extends SingleToolAdapter {
+  readonly stage = 'artifact-malware' as const;
+  readonly tool = 'clamav';
+  readonly heavy = true;
+
+  async exec(t: DeepAuditTarget): Promise<RawStageOutput> {
+    if (!t.isolatedEnv) {
+      throw new ApiError('FORBIDDEN', 'artifact-malware must run in an isolated sandbox (isolatedEnv=true)');
+    }
+    if (!t.workspaceDir) {
+      throw new ApiError('VALIDATION_ERROR', 'artifact-malware requires target.workspaceDir (the artifact tree to scan)');
+    }
+    const target = { kind: 'artifact' as const, ref: t.ref, branch: null };
+    const env = await runScan({
+      scanId: `deep-audit-${t.projectId}-clamav`,
+      projectId: t.projectId,
+      environmentId: t.environmentId,
+      tool: 'clamav',
+      workspaceDir: t.workspaceDir,
+      target,
+    });
+    return { stage: this.stage, tool: this.tool, raw: assertOk('clamav', env) };
   }
 }
 

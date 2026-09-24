@@ -15,6 +15,7 @@ export { normalizePhpcs } from './adapters/phpcs.js';
 export { normalizeTestssl } from './adapters/testssl.js';
 export { normalizeLynis, parseLynisReport } from './adapters/lynis.js';
 export { normalizeZap } from './adapters/zap.js';
+export { normalizeClamav, parseClamscanOutput } from './adapters/clamav.js';
 
 // Cross-stack rule detector (S6-D3).
 export { detectCrossStack } from './detectors/crossstack.js';
