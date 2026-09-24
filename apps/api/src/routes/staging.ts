@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { PgBoss } from 'pg-boss';
-import { ApiError, ok, type StagingSafetyContext } from '@platform/shared';
+import { ApiError, isUuid, ok, type StagingSafetyContext } from '@platform/shared';
 import { requirePermission } from '../auth/service.js';
 import { recordAudit } from '../auth/audit.js';
 import { InMemoryStagingStore, StagingOrchestrator, type StagingStore } from '../staging/queue.js';
@@ -13,8 +13,6 @@ interface Deps {
 
 /** Durable staging run store, api_staging_runs (migration 009). Bound to a real pool on route registration. */
 export let stagingStore: StagingStore = new InMemoryStagingStore();
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Section-11 Safe Staging HTTP surface (S11-D1).
@@ -30,10 +28,10 @@ export async function stagingRoutes(app: FastifyInstance, deps: Deps): Promise<v
 
   app.post('/staging', { preHandler: requirePermission('staging.manage') }, async (req, reply) => {
     const body = (req.body ?? {}) as { projectId?: string; environmentId?: string; ref?: string };
-    if (!body.projectId || !UUID.test(body.projectId)) {
+    if (!body.projectId || !isUuid(body.projectId)) {
       throw new ApiError('VALIDATION_ERROR', 'projectId (uuid) is required');
     }
-    if (!body.environmentId || !UUID.test(body.environmentId)) {
+    if (!body.environmentId || !isUuid(body.environmentId)) {
       throw new ApiError('VALIDATION_ERROR', 'environmentId (uuid) is required');
     }
     if (!body.ref || typeof body.ref !== 'string') {

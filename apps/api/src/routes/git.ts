@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import {
   ApiError,
+  isUuid,
   ok,
   type Page,
   type GitBranchDto,
@@ -518,11 +519,10 @@ export async function gitRoutes(app: FastifyInstance, deps: Deps): Promise<void>
   // ---- S3-D1B: provider credentials + repo snapshot sync + reads ----
 
   const credentialInput = z.object({ token: z.string().min(1).max(500) });
-  const uuidId = (v: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
   /** Resolve a repo link to its scope path; 404 when missing. */
   async function requireRepoLink(id: string): Promise<{ orgId: string; projectId: string }> {
-    if (!uuidId(id)) throw new ApiError('NOT_FOUND', `repo-link ${id} not found`);
+    if (!isUuid(id)) throw new ApiError('NOT_FOUND', `repo-link ${id} not found`);
     const r = await deps.pool.query<{ org_id: string; project_id: string }>(
       'SELECT org_id::text, project_id::text FROM api_repo_links WHERE id = $1',
       [id]

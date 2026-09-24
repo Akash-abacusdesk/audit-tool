@@ -3,6 +3,7 @@ import {
   ApiError,
   assertNotDirectVaultwarden,
   InMemorySecretsStore,
+  isUuid,
   VaultwardenClientStore,
   type SecretsStore,
   type SecretScope,
@@ -36,17 +37,15 @@ export const vaultwardenClient: VaultwardenClientStore | null =
       })
     : null;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function parseScope(params: { orgId: string; projectId?: string; environmentId?: string }): SecretScope {
-  if (!UUID.test(params.orgId)) throw new ApiError('VALIDATION_ERROR', 'orgId must be a uuid');
+  if (!isUuid(params.orgId)) throw new ApiError('VALIDATION_ERROR', 'orgId must be a uuid');
   const scope: SecretScope = { orgId: params.orgId };
   if (params.projectId !== undefined) {
-    if (!UUID.test(params.projectId)) throw new ApiError('VALIDATION_ERROR', 'projectId must be a uuid');
+    if (!isUuid(params.projectId)) throw new ApiError('VALIDATION_ERROR', 'projectId must be a uuid');
     scope.projectId = params.projectId;
   }
   if (params.environmentId !== undefined) {
-    if (!UUID.test(params.environmentId)) throw new ApiError('VALIDATION_ERROR', 'environmentId must be a uuid');
+    if (!isUuid(params.environmentId)) throw new ApiError('VALIDATION_ERROR', 'environmentId must be a uuid');
     scope.environmentId = params.environmentId;
   }
   return scope;

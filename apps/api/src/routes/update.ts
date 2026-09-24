@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { PgBoss } from 'pg-boss';
-import { ApiError, ok, UPDATE_EVENTS, type TransitionContext, type UpdateEvent } from '@platform/shared';
+import { ApiError, isUuid, ok, UPDATE_EVENTS, type TransitionContext, type UpdateEvent } from '@platform/shared';
 import { requirePermission } from '../auth/service.js';
 import { recordAudit } from '../auth/audit.js';
 import { InMemoryUpdateStore, UpdateOrchestrator, type UpdateStore } from '../update/queue.js';
@@ -13,8 +13,6 @@ interface Deps {
 
 /** Durable update-unit store, api_update_units (migration 010). Bound to a real pool on route registration. */
 export let updateStore: UpdateStore = new InMemoryUpdateStore();
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Section-13 Safe WordPress Update Engine HTTP surface (S13-D1).
@@ -39,10 +37,10 @@ export async function updateRoutes(app: FastifyInstance, deps: Deps): Promise<vo
       fromVersion?: string;
       toVersion?: string;
     };
-    if (!body.projectId || !UUID.test(body.projectId)) {
+    if (!body.projectId || !isUuid(body.projectId)) {
       throw new ApiError('VALIDATION_ERROR', 'projectId (uuid) is required');
     }
-    if (!body.environmentId || !UUID.test(body.environmentId)) {
+    if (!body.environmentId || !isUuid(body.environmentId)) {
       throw new ApiError('VALIDATION_ERROR', 'environmentId (uuid) is required');
     }
     if (!body.component || typeof body.component !== 'string') {

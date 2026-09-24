@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { ApiError, ok } from '@platform/shared';
+import { ApiError, isUuid, ok } from '@platform/shared';
 import { requirePermission } from '../auth/service.js';
 import { recordAudit } from '../auth/audit.js';
 import { InMemoryRemediationStore, type RemediationStore } from '../ai-remediation/store.js';
@@ -15,8 +15,6 @@ interface Deps {
 
 /** Durable remediation-request store, api_ai_remediation_requests (migration 011). Bound to a real pool (or the shared instance passed via deps) on route registration. */
 export let remediationStore: RemediationStore = new InMemoryRemediationStore();
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Section-20 developer-triggered AI remediation HTTP surface (S20-D1).
@@ -37,7 +35,7 @@ export async function remediationRoutes(app: FastifyInstance, deps: Deps): Promi
     { preHandler: requirePermission('finding.remediate') },
     async (req, reply) => {
       const { findingId } = req.params as { findingId: string };
-      if (!UUID.test(findingId)) throw new ApiError('VALIDATION_ERROR', 'findingId must be a uuid');
+      if (!isUuid(findingId)) throw new ApiError('VALIDATION_ERROR', 'findingId must be a uuid');
       const body = (req.body ?? {}) as {
         projectId?: string;
         environmentId?: string;
@@ -46,7 +44,7 @@ export async function remediationRoutes(app: FastifyInstance, deps: Deps): Promi
         stackMetadata?: string;
         projectPolicy?: string;
       };
-      if (!body.projectId || !UUID.test(body.projectId)) {
+      if (!body.projectId || !isUuid(body.projectId)) {
         throw new ApiError('VALIDATION_ERROR', 'projectId (uuid) is required');
       }
       if (!body.findingSummary || !body.codeContext) {
