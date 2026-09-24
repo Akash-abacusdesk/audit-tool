@@ -17,6 +17,8 @@ import { wpEventRoutes } from './routes/wp.js';
 import { jitRoutes } from './routes/jit.js';
 import { telegramRoutes } from './routes/telegram.js';
 import { secretsRoutes } from './routes/secrets.js';
+import { deepAuditRoutes } from './routes/deep-audit.js';
+import { stagingRoutes } from './routes/staging.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 
 export interface AppDeps {
@@ -119,6 +121,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   bt('register:telegram done');
   await app.register(secretsRoutes, { prefix: '/api/v1', ...deps });
   bt('register:secrets done');
+  // S14-D3: serialized 7-stage deep-audit pipeline (refuses production targets).
+  await app.register(deepAuditRoutes, { prefix: '/api/v1', pool: deps.pool, boss: deps.boss });
+  bt('register:deep-audit done');
+  // S11-D1: safe ephemeral staging lifecycle (provision/test-run/destroy).
+  await app.register(stagingRoutes, { prefix: '/api/v1', pool: deps.pool, boss: deps.boss });
+  bt('register:staging done');
   // S4A: workload-class queues + admission control telemetry/job ops.
   if (deps.scheduler) {
     await app.register(schedulerRoutes, {

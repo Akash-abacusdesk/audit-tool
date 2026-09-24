@@ -24,15 +24,18 @@ export type Invocation =
       outFile: string;
       /** default-deny floor: scanners read /out from here; egress is offline unless noted. */
       egress?: 'offline' | 'bridge';
-      cmd: (outFile: string, workspaceDir?: string) => string[];
+      cmd: (outFile: string, workspaceDir?: string, targetUrl?: string) => string[];
       extraScratch?: Array<{ path: string; sizeMb: number }>;
       readFrom?: 'file' | 'stdout';
+      /** 'text' skips JSON.parse and hands the adapter the raw string (tools with no JSON output, e.g. Lynis). Default 'json'. */
+      format?: 'json' | 'text';
     }
   | {
       kind: 'command';
       bin: string;
       args: (workspaceDir: string) => string[];
       readFrom: 'stdout';
+      format?: 'json' | 'text';
     }
   | {
       kind: 'rules';
@@ -45,8 +48,10 @@ export interface ScanRequest {
   environmentId?: string;
   /** registry key, e.g. 'semgrep' | 'gitleaks' | 'trivy' | 'npm-audit' | ... */
   tool: string;
-  /** host dir mounted read-only at /workspace inside the worker. */
-  workspaceDir: string;
+  /** host dir mounted read-only at /workspace inside the worker. Omit for URL-target tools (testssl, zap) that scan a network endpoint, not a filesystem. */
+  workspaceDir?: string;
+  /** network endpoint for URL-target tools (testssl, zap). Ignored by filesystem-target tools. */
+  targetUrl?: string;
   target: { kind: TargetKind; ref: string; branch?: string | null };
   /** override for the worker /out scratch dir (otherwise a tmpdir is made + cleaned). */
   outDir?: string;

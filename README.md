@@ -1,19 +1,18 @@
 # DevSecOps Platform Tool
 
-Monorepo for the DevSecOps platform: Fastify API, Next.js portal, scanner orchestration, worker sandboxing, PostgreSQL/PgBouncer infrastructure, and shared contracts.
+Monorepo for the DevSecOps platform: a headless Fastify API, scanner orchestration, worker sandboxing, PostgreSQL/PgBouncer infrastructure, and shared contracts.
 
 ## What This Project Does
 
-This tool is a control plane for running DevSecOps work across projects without running heavy or risky security tooling on production application servers.
+This tool is a control plane for running DevSecOps work across projects without running heavy or risky security tooling on production application servers. It is headless: it ships no operator-facing UI. The Task Portal is a separate external microservice that consumes this platform's private API.
 
 It provides:
 
 - A backend API for health, auth/RBAC, privileged admin flows, Git integration, scanner ingestion, scheduler state, production control, webhooks, WordPress operations, JIT access, Telegram control, and deep audit queueing.
-- A web portal for operators to view findings, vulnerabilities, audit/access state, Git state, onboarding, settings, and design-system primitives.
 - A scanner package that runs and normalizes security tools such as Semgrep, Gitleaks, Trivy, WP/CMS checks, package audit adapters, and custom exposure rules.
 - A worker runtime that executes scanner jobs in isolated Docker containers with resource limits, read-only inputs, writable output/scratch mounts, and cleanup rules.
-- Vaultwarden boundary rules for infrastructure/recovery secrets: scanner workers are explicitly denied direct Vaultwarden access and must receive scoped injected values through the control plane.
-- Shared TypeScript/Zod contracts used by API, portal, scanner, and workers to prevent drift.
+- A private-API client boundary for the external Vaultwarden microservice (infrastructure/recovery secrets): scanner workers are explicitly denied direct Vaultwarden access and must receive scoped injected values through the control plane, which is the only caller of Vaultwarden's private API.
+- Shared TypeScript/Zod contracts used by the API, scanner, and workers to prevent drift; also available to the external Task Portal as a private-API type reference.
 - A local Docker dev stack with PostgreSQL, PgBouncer, and an optional pg-boss smoke job.
 
 ## Requirements
@@ -37,17 +36,9 @@ npm run migrate
 npm run dev:api
 ```
 
-In another terminal:
-
-```powershell
-cd tool
-npm run dev:portal
-```
-
 Default local ports:
 
 - API: `http://localhost:3000` by default.
-- Portal: `http://localhost:3001`.
 - PostgreSQL direct/admin: `127.0.0.1:5433`.
 - PgBouncer app path: `127.0.0.1:6432`.
 
@@ -87,12 +78,11 @@ Run these from `tool/`.
 | `npm test` | Run Vitest suite. |
 | `npm run test:integration` | Run integration driver. Starts/checks required services where scripted. |
 | `npm run test:smoke` | Full clean-stack smoke test. Boots compose, API, pg-boss path, tests, then tears down. |
-| `npm run validate:recovery-host` | Validate the Security / Recovery Host Vaultwarden compose config. |
+| `npm run validate:recovery-host` | Validate the Security / Recovery Host PostgreSQL backup/WAL compose config. |
 | `npm run up` | Start local PostgreSQL + PgBouncer. |
 | `npm run down` | Stop local compose services. |
 | `npm run migrate` | Run API database migrations. |
 | `npm run dev:api` | Start API in watch mode. |
-| `npm run dev:portal` | Start portal on port `3001`. |
 
 Vaultwarden is not started by `npm run up`. The local compose stack only runs PostgreSQL, PgBouncer, and the optional pg-boss smoke container. Vaultwarden is planned as part of the separate Security / Recovery Host, not the local app database stack.
 
@@ -100,10 +90,8 @@ Package-specific commands:
 
 ```powershell
 npm run build -w @platform/api
-npm run build -w @platform/portal
 npm run build -w @platform/scanner
 npm run dev -w @platform/api
-npm run dev -w @platform/portal
 ```
 
 ## Running Tests
@@ -194,7 +182,6 @@ docker compose -f infrastructure/docker-compose.dev.yml --env-file infrastructur
 tool/
   apps/
     api/                 Fastify API, migrations, pg-boss startup, routes, services
-    portal/              Next.js operator portal
   packages/
     shared/              Shared contracts, job schemas, errors, RBAC/security types
     scanner/             Scanner registry, adapters, normalization, ingestion helpers
@@ -234,20 +221,7 @@ Key areas:
 
 Route groups include health, examples, auth, admin, secrets, security, webhooks, Git, scanning, scheduler, production control, WordPress, JIT, Telegram, and deep audit.
 
-### `apps/portal`
-
-Next.js App Router frontend for operators.
-
-Key areas:
-
-- `src/app/layout.tsx`: root layout.
-- `src/app/(portal)/layout.tsx`: authenticated portal shell.
-- `src/app/(portal)/*/page.tsx`: dashboard pages such as findings, vulnerabilities, audit, access, Git, JIT, onboarding, settings, and design.
-- `src/components/ui/`: local design-system primitives.
-- `src/components/shell/`: sidebar, topbar, user chip.
-- `src/lib/`: API/auth helpers.
-
-The portal imports shared contracts instead of backend internals.
+This platform is headless: it ships no operator-facing UI. The Task Portal is a separate external microservice, owned by another team, that consumes this API's private contract.
 
 ### `packages/shared`
 
@@ -255,7 +229,7 @@ Shared TypeScript contracts used across apps and packages.
 
 It contains API envelopes, error codes, job names/payload schemas, scanner contracts, RBAC/security policy types, Git contracts, JIT contracts, Telegram contracts, update state, stack detection types, and deep audit contracts.
 
-Vaultwarden-related policy currently lives here too, in `src/secrets.ts`. `VAULTWARDEN_KEY_PREFIX`, `assertNotDirectVaultwarden`, and scoped secret retrieval rules enforce that scanner workers cannot request Vaultwarden secrets directly.
+Vaultwarden-related policy currently lives here too, in `src/secrets.ts`. `VAULTWARDEN_KEY_PREFIX`, `assertNotDirectVaultwarden`, and scoped secret retrieval rules enforce that scanner workers cannot request Vaultwarden secrets directly. `src/vaultwarden-client.ts` holds the private-API client contract used to call the external Vaultwarden microservice.
 
 Keep this package small. It should remain dependency-light because every app consumes it.
 
@@ -300,7 +274,7 @@ Small production-control and production-communication packages. They hold reusab
 
 ### `packages/recovery-host`
 
-Pure TypeScript recovery-host helpers for Section 15: hardened host plan validation, Vaultwarden isolation flags, backup/WAL/Vaultwarden hash-chain records, integrity verification, and backup freshness status.
+Pure TypeScript recovery-host helpers for Section 15: hardened host plan validation, external-Vaultwarden isolation flags, backup/WAL hash-chain records, integrity verification, and backup freshness status.
 
 ### `infrastructure`
 
@@ -312,29 +286,32 @@ Local Docker environment:
 
 More detail: `docs/ops/docker-dev-env.md`.
 
-Vaultwarden is intentionally absent from this compose file. It belongs to the Security / Recovery Host described in the PRD/build plan, with an isolated datastore and separate validation path.
+Vaultwarden is out of scope for this repo entirely — it is an external microservice with its own datastore and deployment, reached only through a private API call (see PRD §3, §4.2). This compose file's job is PostgreSQL backup/WAL reception and recovery tooling only.
 
 ### Vaultwarden And Secrets
 
-Vaultwarden is the intended secrets service for infrastructure and recovery secrets. It is deployed from `infrastructure/recovery-host/`, not from the local dev compose stack.
+Vaultwarden is NOT hosted by this platform. It is operated by a separate team as an external microservice; this platform only calls its private API to retrieve scoped secrets.
 
 Current repo-owned implementation:
 
-- `infrastructure/recovery-host/docker-compose.yml`: deployable Vaultwarden service for the Security / Recovery Host.
-- `infrastructure/recovery-host/.env.example`: production env template.
+- `infrastructure/recovery-host/docker-compose.yml`: `wal-receiver` (native `pg_receivewal`) streaming WAL from the primary PostgreSQL to this host. No Vaultwarden service here.
+- `infrastructure/recovery-host/.env.example`: production env template (replication connection + backup/WAL paths).
 - `infrastructure/recovery-host/backup.env.example`: Restic backup/restore env template.
 - `infrastructure/recovery-host/Caddyfile.private.example`: optional private reverse proxy template.
-- `infrastructure/recovery-host/bin/backup-recovery-host.sh`: encrypted backup entrypoint for Vaultwarden data, received backups, and WAL.
+- `infrastructure/recovery-host/bin/backup-recovery-host.sh`: encrypted backup entrypoint for received PostgreSQL backups and WAL.
 - `infrastructure/recovery-host/bin/verify-recovery-backups.sh`: backup verification entrypoint.
-- `infrastructure/recovery-host/bin/restore-vaultwarden.sh`: restore entrypoint for Vaultwarden material.
-- `packages/shared/src/secrets.ts`: defines the Vaultwarden key prefix and denial policy.
-- `apps/api/src/routes/secrets.ts`: applies the denial policy on scoped secret reads.
+- `infrastructure/recovery-host/bin/restore-recovery-host.sh`: restore entrypoint for PostgreSQL backup/WAL material.
+- `packages/shared/src/secrets.ts`: defines the Vaultwarden key prefix and denial policy (scanner workers never get Vaultwarden-prefixed keys).
+- `packages/shared/src/vaultwarden-client.ts`: the ONLY client in this platform allowed to call the external Vaultwarden microservice's private API (`VaultwardenClientStore`).
+- `apps/api/src/routes/secrets.ts`: worker-safe scoped-secret routes (`/secrets/:orgId/:key`, always refuses Vaultwarden keys) plus the trusted control-plane route (`/vaultwarden/:orgId/:key`) that calls the external service via `VaultwardenClientStore`, gated by `secret.read.scoped`.
 - Scanner workers must not connect to Vaultwarden or receive standing Vaultwarden credentials.
 - Trusted control-plane code may retrieve scoped values and inject only the minimum secret needed for a job.
 
-Planned topology from the PRD/build plan:
+Configure the private API client via `VAULTWARDEN_BASE_URL`/`VAULTWARDEN_API_TOKEN` on the API host. Unset in dev/test — the `/vaultwarden/*` route returns `UNAVAILABLE` (503) until configured.
 
-- Vaultwarden runs on the Security / Recovery Host.
+Topology:
+
+- Vaultwarden runs on infrastructure owned by its own team, not this repo.
 - It uses its own isolated datastore.
 - It is not routed through the central PgBouncer/PostgreSQL app path.
 - Scanner workers are validated to have no direct Vaultwarden path.
@@ -363,7 +340,7 @@ Important fixture groups:
 2. The route validates input using shared contracts or local schemas.
 3. The service reads/writes PostgreSQL through PgBouncer.
 4. Long-running work is queued through pg-boss after database commits.
-5. Responses use the shared API envelope shape so portal/tests can rely on consistent success and error formats.
+5. Responses use the shared API envelope shape so the external Task Portal/tests can rely on consistent success and error formats.
 
 ### Scanner Flow
 
@@ -394,17 +371,9 @@ Heavy scanner jobs must not run on production VPSs that serve live sites. They r
 4. Direct PostgreSQL is reserved for migrations/admin work.
 5. pg-boss uses the same PostgreSQL instance for job state.
 
-### Portal Flow
-
-1. Next.js serves the operator portal on port `3001`.
-2. Pages render through the portal shell and local design-system primitives.
-3. Portal data access should go through its `src/lib` API helpers.
-4. Portal code should consume `@platform/shared` contracts, not API implementation files.
-
 ## Build And Release Notes
 
 - Root `npm run build` uses TypeScript project references.
-- Portal builds with Next.js via `npm run build -w @platform/portal`.
 - Scanner images are built from `scanner/images/<tool>/Dockerfile`.
 - Tool versions and resource profiles are documented under `scanner/tools.json`, `scanner/profiles.json`, and `docs/scanning/SCANNING-CONVENTIONS.md`.
 
@@ -458,7 +427,7 @@ Validate from a clean worktree before assuming the branch is broken. This repo m
 - `docs/error-conventions.md`: error code and HTTP status rules.
 - `docs/testing/test-strategy.md`: test tiers and smoke strategy.
 - `docs/ops/docker-dev-env.md`: local Docker services.
+- `docs/ops/phase3-readiness.md`: exactly what real credentials/infra each remaining gap needs, and what's already built and waiting for them.
 - `docs/scanning/SCANNING-CONVENTIONS.md`: scanner contracts, severity mapping, and runtime profiles.
 - `docs/security/worker-runtime-isolation.md`: worker runtime hardening.
-- `docs/frontend/architecture.md`: portal architecture and design system.
 - `docs/cms/README.md`: CMS and WordPress integration docs.

@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto';
 export interface RecoveryHostPlanInput {
   hostId: string;
   privateAddress: string;
-  vaultwardenUrl: string;
+  /**
+   * Base URL of the EXTERNAL Vaultwarden microservice's private API (PRD §4.2).
+   * This host no longer runs Vaultwarden itself; it only needs this URL to
+   * confirm the control plane's only path to it is a private, HTTPS API call.
+   */
+  vaultwardenApiUrl: string;
   backupDir: string;
   walDir: string;
   encryptedStorage: boolean;
@@ -18,7 +23,7 @@ export interface RecoveryHostPlan extends RecoveryHostPlanInput {
 export function buildRecoveryHostPlan(input: RecoveryHostPlanInput): RecoveryHostPlan {
   if (!input.encryptedStorage) throw new Error('recovery host requires encrypted storage');
   if (!input.independentAdmin) throw new Error('recovery host requires independent admin credentials');
-  if (!/^https:\/\//.test(input.vaultwardenUrl)) throw new Error('Vaultwarden URL must be HTTPS');
+  if (!/^https:\/\//.test(input.vaultwardenApiUrl)) throw new Error('Vaultwarden private API URL must be HTTPS');
   if (!input.privateAddress) throw new Error('private address is required');
   return { ...input, vaultwardenIsolated: true, workerAccess: false };
 }

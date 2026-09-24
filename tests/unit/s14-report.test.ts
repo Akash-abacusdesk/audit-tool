@@ -12,6 +12,7 @@ const TARGET: DeepAuditTarget = {
   environment: 'staging',
   ref: 'main',
   isolatedEnv: true,
+  clonePath: '/clone/img',
 };
 
 describe('S14-D3 deep-audit report aggregation', () => {

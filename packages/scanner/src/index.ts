@@ -12,6 +12,9 @@ export { normalizeTrivy } from './adapters/trivy.js';
 export { normalizePackageAudit } from './adapters/packageAudit.js';
 export { normalizeComposerAudit } from './adapters/composerAudit.js';
 export { normalizePhpcs } from './adapters/phpcs.js';
+export { normalizeTestssl } from './adapters/testssl.js';
+export { normalizeLynis, parseLynisReport } from './adapters/lynis.js';
+export { normalizeZap } from './adapters/zap.js';
 
 // Cross-stack rule detector (S6-D3).
 export { detectCrossStack } from './detectors/crossstack.js';

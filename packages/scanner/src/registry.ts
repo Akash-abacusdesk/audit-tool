@@ -7,6 +7,9 @@ import { normalizeTrivy } from './adapters/trivy.js';
 import { normalizePackageAudit } from './adapters/packageAudit.js';
 import { normalizeComposerAudit } from './adapters/composerAudit.js';
 import { normalizePhpcs } from './adapters/phpcs.js';
+import { normalizeTestssl } from './adapters/testssl.js';
+import { normalizeLynis } from './adapters/lynis.js';
+import { normalizeZap } from './adapters/zap.js';
 import { detectCrossStack } from './detectors/crossstack.js';
 import { detectWpVulnIntelligence } from './detectors/wpVulnIntel.js';
 
@@ -103,6 +106,56 @@ export const REGISTRY: Record<string, ScannerDef> = {
       egress: 'offline',
       cmd: (o) => ['--report=json', '--standard=WordPress', '/workspace'],
       readFrom: 'stdout',
+    },
+  },
+  // S14 host-lynis: audits the container's own filesystem/OS, so /workspace is
+  // mounted as an approved clone/image root, never a live production host
+  // (enforced at the deep-audit admission layer, packages/shared/deep-audit.ts).
+  // Lynis has no JSON output mode — `format: 'text'` skips JSON.parse and hands
+  // the adapter the raw lynis-report.dat contents (see adapters/lynis.ts).
+  lynis: {
+    adapter: normalizeLynis,
+    invocation: {
+      kind: 'image',
+      profile: 'small',
+      outFile: 'lynis-report.dat',
+      egress: 'offline',
+      format: 'text',
+      // The image entrypoint hardcodes --report-file/--logfile to /tmp before
+      // appending these args; a repeated flag overrides the earlier value.
+      cmd: (o) => ['audit', 'system', '--report-file', `/out/${o}`, '--logfile', '/out/lynis.log', '--quiet'],
+    },
+  },
+  // S14 tls-network: external, non-destructive TLS/posture check against a
+  // managed endpoint URL (never a live customer-serving probe beyond this).
+  'testssl.sh': {
+    adapter: normalizeTestssl,
+    invocation: {
+      kind: 'image',
+      profile: 'small',
+      outFile: 'testssl.json',
+      egress: 'bridge', // connects out to the target endpoint by design
+      cmd: (o, _workspaceDir, targetUrl) => {
+        if (!targetUrl) throw new Error('testssl.sh requires req.targetUrl');
+        return ['--jsonfile-pretty', `/out/${o}`, '--quiet', '--warnings', 'batch', targetUrl];
+      },
+    },
+  },
+  // S14 staging-zap: DAST against a staging environment ONLY — the deep-audit
+  // admission layer refuses this stage outside an isolated sandbox and never
+  // against production. "Quick scan" mode (-cmd -quickurl/-quickout) is ZAP's
+  // built-in non-interactive CLI scan, invoked through the image's zap-x.sh.
+  zap: {
+    adapter: normalizeZap,
+    invocation: {
+      kind: 'image',
+      profile: 'large',
+      outFile: 'zap.json',
+      egress: 'bridge',
+      cmd: (o, _workspaceDir, targetUrl) => {
+        if (!targetUrl) throw new Error('zap requires req.targetUrl (a staging URL, never production)');
+        return ['-cmd', '-quickurl', targetUrl, '-quickout', `/out/${o}`, '-quickprogress'];
+      },
     },
   },
   // S6-D3: generic cross-stack detection rules (internal detector, not a binary).

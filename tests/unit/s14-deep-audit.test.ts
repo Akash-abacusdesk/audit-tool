@@ -19,6 +19,7 @@ function staging(over: Partial<DeepAuditTarget> = {}): DeepAuditTarget {
     environment: 'staging',
     ref: 'main',
     isolatedEnv: true,
+    clonePath: '/clone/img',
     ...over,
   };
 }

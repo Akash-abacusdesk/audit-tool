@@ -13,7 +13,6 @@ platform/
 │   ├── error-conventions.md       # error codes ↔ HTTP status (D1/jim)
 │   ├── db-conventions.md          # migrations, tx, idempotency (D1/jim)
 │   ├── cms/                       # WP/headless patterns (D4)
-│   ├── frontend/                  # portal architecture (D5)
 │   ├── scanning/                  # scanner conventions (D3)
 │   └── testing/                   # test strategy (D6)
 ├── packages/

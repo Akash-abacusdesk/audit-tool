@@ -4,6 +4,11 @@ export interface Config {
   databaseUrl: string;
   pgbossUrl: string;
   logLevel: string;
+  /** External Vaultwarden microservice (private API). Unset in dev/test: falls back to the in-memory store. */
+  vaultwardenBaseUrl: string | null;
+  vaultwardenApiToken: string | null;
+  /** Outbound Telegram Bot API token (@BotFather). Unset: outbound alerts/approvals are disabled. */
+  telegramBotToken: string | null;
 }
 
 function required(name: string): string {
@@ -20,5 +25,8 @@ export function loadConfig(): Config {
     // Same PG instance by default; pg-boss keeps its own 'pgboss' schema.
     pgbossUrl: process.env.PGBOSS_URL ?? databaseUrl,
     logLevel: process.env.LOG_LEVEL ?? 'info',
+    vaultwardenBaseUrl: process.env.VAULTWARDEN_BASE_URL ?? null,
+    vaultwardenApiToken: process.env.VAULTWARDEN_API_TOKEN ?? null,
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? null,
   };
 }

@@ -1,13 +1,40 @@
 import type { FastifyInstance } from 'fastify';
-import { ApiError, assertNotDirectVaultwarden, InMemorySecretsStore, type SecretScope } from '@platform/shared';
+import {
+  ApiError,
+  assertNotDirectVaultwarden,
+  InMemorySecretsStore,
+  VaultwardenClientStore,
+  type SecretsStore,
+  type SecretScope,
+} from '@platform/shared';
 import { requirePermission } from '../auth/service.js';
+import { PgSecretsStore } from '../secrets/pg-store.js';
 
 interface Deps {
   pool: import('pg').Pool;
 }
 
-/** Shared in-memory secret store (D1 mock). Swap for the Recovery-Host-backed store later. */
-export const secretsStore = new InMemorySecretsStore();
+/**
+ * Non-Vaultwarden scoped secrets, durable in `api_secrets` (S15-D1; migration
+ * 009). Vaultwarden-prefixed keys are refused before either store is touched
+ * (see assertNotDirectVaultwarden) — this store never holds Vaultwarden
+ * material. Falls back to an in-memory store only if secretsRoutes is never
+ * registered (should not happen outside a test that skips it deliberately).
+ */
+export let secretsStore: SecretsStore = new InMemorySecretsStore();
+
+/**
+ * Control-plane client for the EXTERNAL Vaultwarden microservice (PRD §4.2,
+ * §15). `null` when VAULTWARDEN_BASE_URL/VAULTWARDEN_API_TOKEN are unset —
+ * every dev/test/CI environment runs without a live Vaultwarden dependency.
+ */
+export const vaultwardenClient: VaultwardenClientStore | null =
+  process.env.VAULTWARDEN_BASE_URL && process.env.VAULTWARDEN_API_TOKEN
+    ? new VaultwardenClientStore({
+        baseUrl: process.env.VAULTWARDEN_BASE_URL,
+        apiToken: process.env.VAULTWARDEN_API_TOKEN,
+      })
+    : null;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -25,8 +52,9 @@ function parseScope(params: { orgId: string; projectId?: string; environmentId?:
   return scope;
 }
 
-export async function secretsRoutes(app: FastifyInstance, _deps: Deps): Promise<void> {
+export async function secretsRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   console.log('[boot] plugin:secrets enter');
+  secretsStore = new PgSecretsStore(deps.pool);
 
   // Scoped retrieval — requires secret.read.scoped; workers cannot pull Vaultwarden directly.
   app.get(
@@ -63,6 +91,28 @@ export async function secretsRoutes(app: FastifyInstance, _deps: Deps): Promise<
       if (typeof b.value !== 'string') throw new ApiError('VALIDATION_ERROR', 'value (string) is required');
       await secretsStore.put(scope, key, b.value);
       return { ok: true as const, data: { key, stored: true } };
+    }
+  );
+
+  // Trusted control-plane retrieval from the EXTERNAL Vaultwarden microservice.
+  // Distinct route (not /secrets/:orgId/:key) so the worker-safe path above can
+  // never be reached by a Vaultwarden key, by construction, not just by check.
+  app.get(
+    '/vaultwarden/:orgId/:key',
+    { preHandler: requirePermission('secret.read.scoped') },
+    async (req) => {
+      if (!vaultwardenClient) {
+        throw new ApiError('UNAVAILABLE', 'VAULTWARDEN_BASE_URL/VAULTWARDEN_API_TOKEN not configured');
+      }
+      const { orgId, key } = req.params as { orgId: string; key: string };
+      const scope = parseScope({
+        orgId,
+        projectId: (req.query as { projectId?: string })?.projectId,
+        environmentId: (req.query as { environmentId?: string })?.environmentId,
+      });
+      const value = await vaultwardenClient.get(scope, key);
+      if (value === null) throw new ApiError('NOT_FOUND', `secret ${key} not found in scope`);
+      return { ok: true as const, data: { key, value } };
     }
   );
 

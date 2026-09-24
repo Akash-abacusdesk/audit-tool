@@ -1,5 +1,5 @@
 import { loadConfig } from './config.js';
-import { JOB, webhookReceivedPayload } from '@platform/shared';
+import { JOB, webhookReceivedPayload, type DeepAuditStage, type DeepAuditTarget } from '@platform/shared';
 import { createPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { startBoss } from './plugins/pgboss.js';
@@ -8,6 +8,8 @@ import { buildApp } from './server.js';
 import { handleWebhookReceived } from './git/sync.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { startOrphanSweeper } from '@platform/worker-runtime';
+import { deepAuditStore } from './routes/deep-audit.js';
+import { DeepAuditQueue } from './deep-audit/queue.js';
 
 /**
  * Boot path: config → pool → migrations → pg-boss (+ workers) → HTTP → graceful shutdown.
@@ -67,6 +69,23 @@ async function main(): Promise<void> {
       await handleWebhookReceived(pool, parsed.data.eventId, {
         error: (o, m) => console.error('[worker] git.webhook.received:', m, JSON.stringify(o)),
       });
+    }
+  });
+  // S14-D3: deep-audit pipeline — one stage per job, self-chaining (queue.ts).
+  try {
+    await boss.inner.createQueue('deep-audit.stage');
+  } catch {
+    // already exists
+  }
+  const deepAuditQueue = new DeepAuditQueue(boss.inner, deepAuditStore);
+  await boss.inner.work('deep-audit.stage', async (jobs) => {
+    for (const job of jobs) {
+      const data = job.data as { auditId: string; stage: DeepAuditStage; target: DeepAuditTarget };
+      try {
+        await deepAuditQueue.handleStageJob(data);
+      } catch (err) {
+        console.error('[worker] deep-audit.stage:', data.stage, err instanceof Error ? err.message : err);
+      }
     }
   });
   bootAt('worker registered');

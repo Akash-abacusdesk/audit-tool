@@ -8,6 +8,9 @@ import { z } from 'zod';
 export const JOB = {
   exampleCreated: 'example.created',
   webhookReceived: 'git.webhook.received',
+  stagingProvision: 'staging.provision',
+  stagingTestRun: 'staging.test_run',
+  stagingDestroy: 'staging.destroy',
 } as const;
 
 export type JobName = (typeof JOB)[keyof typeof JOB];

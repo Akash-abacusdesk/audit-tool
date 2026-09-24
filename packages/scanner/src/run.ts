@@ -72,6 +72,7 @@ export async function runScan(req: ScanRequest, deps: RunDeps = {}): Promise<Sca
 
     if (def.invocation.kind === 'rules') {
       // Internal cross-stack detector: reads the workspace, emits findings directly.
+      if (!req.workspaceDir) throw new Error(`scanner ${req.tool} requires workspaceDir`);
       const findings = await def.invocation.detect(req.workspaceDir, ctx);
       return { ...base, finished_at: now().toISOString(), findings };
     }
@@ -84,7 +85,7 @@ export async function runScan(req: ScanRequest, deps: RunDeps = {}): Promise<Sca
         runId: `scan-${req.scanId}-${req.tool}`,
         jobId: req.jobId,
         image,
-        cmd: def.invocation.cmd(def.invocation.outFile, req.workspaceDir),
+        cmd: def.invocation.cmd(def.invocation.outFile, req.workspaceDir, req.targetUrl),
         workspaceDir: req.workspaceDir,
         outDir,
         limits: profileOf(req.tool),
@@ -108,15 +109,18 @@ export async function runScan(req: ScanRequest, deps: RunDeps = {}): Promise<Sca
           : await readFile(join(outDir, def.invocation.outFile), 'utf8');
       if (!deps.keepOutDir) await rm(outDir, { recursive: true, force: true }).catch(() => {});
     } else {
+      if (!req.workspaceDir) throw new Error(`scanner ${req.tool} requires workspaceDir`);
+      const workspaceDir = req.workspaceDir;
       const fallbackExec = (b: string, a: string[]): Promise<{ stdout: string; stderr: string }> =>
-        execFileP(b, a, { cwd: req.workspaceDir, maxBuffer: 64 * 1024 * 1024 });
+        execFileP(b, a, { cwd: workspaceDir, maxBuffer: 64 * 1024 * 1024 });
       const exec = deps.execFile ?? fallbackExec;
-      const r = await exec(def.invocation.bin, def.invocation.args(req.workspaceDir));
+      const r = await exec(def.invocation.bin, def.invocation.args(workspaceDir));
       raw = r.stdout;
     }
 
     if (!def.adapter) throw new Error(`scanner ${req.tool} has no adapter`);
-    const findings = def.adapter(JSON.parse(raw), {
+    const parsed = def.invocation.format === 'text' ? raw : JSON.parse(raw);
+    const findings = def.adapter(parsed, {
       tool: req.tool,
       target: { kind: req.target.kind, ref: req.target.ref, branch: req.target.branch ?? null },
     });

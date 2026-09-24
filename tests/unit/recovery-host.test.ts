@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { buildRecoveryHostPlan, freshnessStatus, receiveBackup, verifyIntegrity } from '../../packages/recovery-host/src/index.js';
 
 describe('@platform/recovery-host', () => {
-  it('builds a hardened Vaultwarden recovery-host plan', () => {
+  it('builds a hardened recovery-host plan isolated from the external Vaultwarden microservice', () => {
     const plan = buildRecoveryHostPlan({
       hostId: 'recovery-1',
       privateAddress: '10.10.0.2',
-      vaultwardenUrl: 'https://vaultwarden.internal.example',
+      vaultwardenApiUrl: 'https://vaultwarden.internal.example',
       backupDir: '/srv/platform-recovery/backups',
       walDir: '/srv/platform-recovery/wal',
       encryptedStorage: true,

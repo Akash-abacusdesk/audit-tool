@@ -5,6 +5,7 @@ import {
   ok,
   telegramCallback,
   telegramAuthorizationInput,
+  TelegramClient,
   type TelegramAuthorizationDto,
   type TelegramCallbackIngestResult,
 } from '@platform/shared';
@@ -35,6 +36,17 @@ function hdr(req: FastifyRequest, name: string): string | undefined {
 
 const MAX_AGE_MS = Number(process.env.TELEGRAM_MAX_AGE_MIN ?? 10) * 60_000;
 const BODY_LIMIT = Number(process.env.TELEGRAM_BODY_LIMIT_BYTES ?? 10_485_760);
+
+/**
+ * Outbound client for alerts/approvals/reminders (PRD §2.1.6, §14). `null`
+ * when TELEGRAM_BOT_TOKEN is unset — every dev/test/CI environment runs
+ * without a live Telegram dependency. No call site wires this in yet (no
+ * notification_outbox exists — PRD §16 — to durably queue sends); it's the
+ * delivery primitive ready for that to be built on top of.
+ */
+export const telegramClient: TelegramClient | null = process.env.TELEGRAM_BOT_TOKEN
+  ? new TelegramClient({ botToken: process.env.TELEGRAM_BOT_TOKEN })
+  : null;
 
 /**
  * S9-D1 Telegram control plane.

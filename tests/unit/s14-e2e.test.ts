@@ -18,7 +18,7 @@ describe('S14-D6 deep-audit e2e regression', () => {
   const ENV = '22222222-2222-4222-8222-222222222222';
 
   function target(over: Partial<DeepAuditTarget> = {}): DeepAuditTarget {
-    return { projectId: PROJECT, environmentId: ENV, environment: 'staging', ref: 'main', isolatedEnv: true, ...over };
+    return { projectId: PROJECT, environmentId: ENV, environment: 'staging', ref: 'main', isolatedEnv: true, clonePath: '/clone/img', ...over };
   }
 
   it('mocks all 7 stages and runs the full serialized pipeline in order', async () => {

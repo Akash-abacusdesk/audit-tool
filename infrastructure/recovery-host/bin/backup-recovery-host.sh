@@ -13,14 +13,12 @@ set +a
 
 : "${RESTIC_REPOSITORY:?set RESTIC_REPOSITORY}"
 : "${RESTIC_PASSWORD_FILE:?set RESTIC_PASSWORD_FILE}"
-: "${VAULTWARDEN_DATA_DIR:?set VAULTWARDEN_DATA_DIR}"
 : "${RECOVERY_BACKUP_DIR:?set RECOVERY_BACKUP_DIR}"
 : "${RECOVERY_WAL_DIR:?set RECOVERY_WAL_DIR}"
 
 restic snapshots >/dev/null 2>&1 || restic init
 
 restic backup \
-  "$VAULTWARDEN_DATA_DIR" \
   "$RECOVERY_BACKUP_DIR" \
   "$RECOVERY_WAL_DIR" \
   --tag platform-recovery-host

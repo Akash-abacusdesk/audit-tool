@@ -10,7 +10,11 @@ Status meanings:
 
 ## Current Truth
 
-The project is not yet 100% PRD-complete. The control-plane baseline is broad, but production-readiness still has open gaps around recovery-host operations, live browser/ZAP validation, real deep-audit execution, final capacity selection, and end-to-end release acceptance.
+**Scope change:** Vaultwarden and the Task Portal (Next.js UI) are no longer part of this platform. Both are external microservices reached only through private API calls (PRD §3, §4.2). `apps/portal` still exists in this repo but is excluded from completion accounting below pending extraction to its own repo.
+
+The project is not yet 100% PRD-complete. Recent audit found the build was silently broken (stale `dist`/`.tsbuildinfo` cache masked 20 TypeScript errors; S11 staging and S14 deep-audit routes were unreachable — never registered on the server, and `packages/shared` was missing the staging module entirely). This has been fixed: clean build passes, 313/313 unit tests pass, and S11/S14 routes are now wired into `server.ts`. A private-API client to the external Vaultwarden microservice now exists (`packages/shared/src/vaultwarden-client.ts`), and Vaultwarden hosting has been stripped from `infrastructure/recovery-host` in favor of real PostgreSQL WAL reception (`pg_receivewal`).
+
+Remaining gaps are largely live-infrastructure/live-tool work that cannot be verified in a dev sandbox: real Semgrep/Lynis/testssl/ZAP/ClamAV execution behind the deep-audit mock adapters, live WordPress staging validation, capacity benchmarking, and DR drills.
 
 ## Section Map
 
@@ -26,11 +30,11 @@ The project is not yet 100% PRD-complete. The control-plane baseline is broad, b
 | S8 WordPress monitoring and JIT | partial | `cms/wordpress/mu-plugins`, `routes/wp.ts`, `routes/jit.ts`, tests | Live WordPress deployment validation and temporary-session proof on real WP. |
 | S9 Telegram operations | partial | `routes/telegram.ts`, shared contracts, tests | Real bot webhook/token deployment and notification preferences wiring. |
 | S10 WP vulnerability/update intelligence | implemented | WP inventory, WP advisory correlation, vulnerability UI helpers/tests | Replace fixture advisory feed with production feed when approved. |
-| S11 Safe staging environment | partial | staging queue/lifecycle code and tests | Full production snapshot clone, PII sanitizer execution, integration neutralization on real staging. |
+| S11 Safe staging environment | partial | `packages/shared/src/staging.ts` (state machine + safety gate), `apps/api/src/staging/queue.ts`, `apps/api/src/routes/staging.ts` — now registered and tested (`tests/unit/s11-staging*.test.ts`) | Real ephemeral WP container provisioning, PII sanitizer execution, integration neutralization on real staging (orchestration layer is real; the provisioner worker behind `STAGING_PROVISION` is not). |
 | S12 Functional/visual validation | partial | browser-heavy limiter, validation UI/docs | Real Playwright worker, screenshots, masks, visual diff persistence. |
 | S13 Safe WP update engine | partial | update state model, update APIs/UI, promotion primitives | Full staged update execution, health check, promotion, rollback against real WP. |
-| S14 Deep security/posture audit | partial | deep-audit route/queue/contracts, mocked stage adapters | Replace mocked stages with live Semgrep history, Lynis clone, testssl, ZAP, malware execution. |
-| S15 Security/Recovery infrastructure | partial | `infrastructure/recovery-host`, `packages/recovery-host`, Vaultwarden compose, Restic scripts, secrets route | WAL shipping/reception automation, live restore drill, real Vaultwarden client. |
+| S14 Deep security/posture audit | partial | 4/7 stages now real: `RealCodeSastAdapter` (Semgrep+Gitleaks), `RealHostLynisAdapter` (Lynis), `RealTlsNetworkAdapter` (testssl.sh), `RealStagingZapAdapter` (ZAP) — all reuse `@platform/scanner`'s registry/worker-runtime path against the already-built `devsecops/scanner-{semgrep,gitleaks,lynis,testssl,zap}` images (scanner/build-record.json). Pipeline itself is now true per-stage pg-boss jobs, chained, idempotent, registered as a live worker in main.ts. | cms-advisory (WPScan/advisory — packages/scanner has WP intel, not wired) and artifact-malware (no scanner image yet) still mocked. Nothing here has run against real Docker this session — unit-tested only (mocked runScan); verify against live containers before trusting findings. |
+| S15 Security/Recovery infrastructure | partial | `infrastructure/recovery-host` (WAL reception via `pg_receivewal`, Restic backup/restore scripts), `packages/recovery-host`, `packages/shared/src/vaultwarden-client.ts` (private-API client), `apps/api/src/routes/secrets.ts` (`/vaultwarden/:orgId/:key`) | Live restore drill; the private-API client is unit-tested against a mocked fetch but not against a real Vaultwarden deployment (owned by the external team). |
 | S16 Disaster recovery/compromise response | partial | docs/tests reported in hive history, some recovery scripts now present | Execute live PostgreSQL restore, management rebuild, Vaultwarden recovery, trust revocation drill. |
 | S17 Threat-model validation/hardening | partial | threat-model docs/tests reported in hive history | Run live adversarial drills for cases that cannot be unit-tested. |
 | S18 Capacity benchmarking/sizing | partial | benchmark script and capacity package reported in hive history | Run representative production benchmarks and select final host sizes/concurrency. |

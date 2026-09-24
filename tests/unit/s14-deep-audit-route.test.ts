@@ -5,20 +5,15 @@ import {
   deepAuditRoutes,
   deepAuditStore,
 } from '../../apps/api/src/routes/deep-audit.js';
-import type { DeepAuditTarget } from '@platform/shared';
+import { fail, toApiError, type DeepAuditTarget } from '@platform/shared';
 
-vi.mock('../../apps/api/src/deep-audit/queue.js', () => {
+vi.mock('../../apps/api/src/deep-audit/queue.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../apps/api/src/deep-audit/queue.js')>();
   const sent: any[] = [];
   return {
-    DeepAuditStore: class {
-      create(t: any) {
-        return 'stored-' + sent.length;
-      }
-      get() {
-        return null;
-      }
-      setResult() {}
-    },
+    // Real DeepAuditStore: route tests below manipulate deepAuditStore.runs
+    // directly, so only the pg-boss-touching queue needs a fake.
+    ...actual,
     DeepAuditQueue: class {
       constructor() {}
       async enqueuePipeline(_id: string, target: DeepAuditTarget) {
@@ -58,6 +53,10 @@ async function buildApp(role = 'manager') {
   const boss = { send: vi.fn(async () => 'job-x') } as any;
   const app = Fastify({ logger: false, genReqId: (r) => (typeof r.headers['x-request-id'] === 'string' ? r.headers['x-request-id'] : 'fallback') });
   app.decorate('pool', pool);
+  app.setErrorHandler((err, req, reply) => {
+    const apiErr = toApiError(err);
+    reply.status(apiErr.status).send(fail(apiErr.code, apiErr.message, apiErr.details, req.id));
+  });
   await app.register(deepAuditRoutes, { prefix: '/api/v1', pool, boss });
   await app.ready();
   return { app, auditCalls };
@@ -69,7 +68,7 @@ const stagingBody = { projectId: PROJECT, environmentId: ENV, environment: 'stag
 describe('S14-D3 deep-audit routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    for (const k of Object.keys((deepAuditStore as any).runs)) delete (deepAuditStore as any).runs[k];
+    (deepAuditStore as any).runs.clear();
   });
 
   it('POST /run enqueues a 7-stage pipeline for a staging target (202)', async () => {

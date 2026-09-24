@@ -58,6 +58,10 @@ export const deepAuditTarget = z.object({
   clonePath: z.string().min(1).max(1000).optional(),
   /** Heavy stages (ZAP, malware) MUST run inside an isolated sandbox. */
   isolatedEnv: z.boolean().default(false),
+  /** Host dir with the checked-out ref, mounted read-only for code-sast tool execution. */
+  workspaceDir: z.string().min(1).max(2000).optional(),
+  /** Reachable endpoint for URL-target stages (tls-network, staging-zap). Never a production URL — admission refuses those stages outside isolatedEnv. */
+  targetUrl: z.string().url().max(2000).optional(),
 });
 
 export type DeepAuditTarget = z.infer<typeof deepAuditTarget>;
@@ -356,6 +360,9 @@ export interface DeepAuditRunState {
   id: string;
   target: DeepAuditTarget;
   stages: StageStatus[];
+  /** Running findings collected from completed non-normalize stages (pre-dedup). */
+  aggregated: FindingInput[];
+  /** Final findings — empty until the 'normalize' stage completes. */
   findings: FindingInput[];
   startedAt: string;
   finishedAt: string | null;
@@ -368,17 +375,23 @@ export interface DeepAuditOrchestratorDeps {
   admission?: (target: DeepAuditTarget, stage: DeepAuditStage) => AdmissionVerdict;
 }
 
+/**
+ * Serialized 7-stage state machine. `run()` drives all 7 stages in one call
+ * (unit tests, one-shot use). `initState`/`runStage` are the same logic split
+ * into per-stage steps so a pg-boss worker can execute exactly ONE stage per
+ * job, persist the returned state, and enqueue the next stage — true
+ * serialization (one stage in flight at a time) and crash-safe resume (a
+ * redelivered job for an already-`done` stage is a no-op).
+ */
 export class DeepAuditOrchestrator {
   constructor(private readonly deps: DeepAuditOrchestratorDeps) {}
 
-  /** Run all 7 stages IN ORDER. Refuses production targets before stage 1. */
-  async run(id: string, target: DeepAuditTarget): Promise<DeepAuditRunState> {
+  /** Fresh run state for `id`/`target`. Refuses production targets up front. */
+  initState(id: string, target: DeepAuditTarget): DeepAuditRunState {
     if (isProductionTarget(target)) {
       throw new ApiError('FORBIDDEN', 'deep-audit may not target a live production environment');
     }
-    const admission = this.deps.admission ?? evaluateStageAdmission;
-    const aggregated: FindingInput[] = [];
-    const state: DeepAuditRunState = {
+    return {
       id,
       target,
       stages: DEEP_AUDIT_STAGES.map((s) => ({
@@ -387,52 +400,81 @@ export class DeepAuditOrchestrator {
         tool: this.deps.adapters[s].tool,
         findingCount: 0,
       })),
+      aggregated: [],
       findings: [],
       startedAt: new Date().toISOString(),
       finishedAt: null,
       error: null,
     };
+  }
 
-    for (let i = 0; i < DEEP_AUDIT_STAGES.length; i++) {
-      const stage = DEEP_AUDIT_STAGES[i]!;
-      const adapter = this.deps.adapters[stage];
-      const st = state.stages[i]!;
-      st.status = 'running';
+  /**
+   * Execute exactly one stage against `state` and return the updated state.
+   * Idempotent: a stage already `done` is returned unchanged (safe pg-boss
+   * redelivery). Out-of-order execution (a stage whose predecessor has not
+   * completed) is refused — the pipeline is serialized by construction, not
+   * by trusting caller order.
+   */
+  async runStage(state: DeepAuditRunState, stage: DeepAuditStage): Promise<DeepAuditRunState> {
+    const i = DEEP_AUDIT_STAGES.indexOf(stage);
+    const st = state.stages[i]!;
+    if (st.status === 'done') return state; // redelivery of an already-completed stage
 
-      const verdict = admission(target, stage);
-      if (!verdict.ok) {
-        st.status = 'failed';
-        st.error = verdict.reason;
-        state.error = verdict.reason ?? 'admission denied';
-        state.finishedAt = new Date().toISOString();
-        throw new ApiError('FORBIDDEN', verdict.reason ?? 'stage not admissible');
-      }
-
-      try {
-        // Stage 7 folds in everything collected so far.
-        const execTarget =
-          stage === 'normalize' ? ({ ...target, _findings: aggregated } as DeepAuditTarget) : target;
-        const raw = await adapter.exec(execTarget);
-        const findings = adapter.normalize(raw);
-        st.findingCount = findings.length;
-        st.status = 'done';
-        if (stage === 'normalize') {
-          // prioritized + deduped set replaces the raw aggregate
-          state.findings = findings;
-        } else {
-          aggregated.push(...findings);
-          if (i === DEEP_AUDIT_STAGES.length - 1) state.findings = findings;
-        }
-      } catch (err) {
-        st.status = 'failed';
-        st.error = err instanceof Error ? err.message : String(err);
-        state.error = st.error;
-        state.finishedAt = new Date().toISOString();
-        throw err;
-      }
+    if (i > 0 && state.stages[i - 1]!.status !== 'done') {
+      throw new ApiError(
+        'CONFLICT',
+        `deep-audit stage ${stage} cannot run before ${state.stages[i - 1]!.stage} completes`
+      );
     }
-    if (!state.findings.length) state.findings = aggregated;
-    state.finishedAt = new Date().toISOString();
+
+    const adapter = this.deps.adapters[stage];
+    const admission = this.deps.admission ?? evaluateStageAdmission;
+    st.status = 'running';
+
+    const verdict = admission(state.target, stage);
+    if (!verdict.ok) {
+      st.status = 'failed';
+      st.error = verdict.reason;
+      state.error = verdict.reason ?? 'admission denied';
+      state.finishedAt = new Date().toISOString();
+      throw new ApiError('FORBIDDEN', verdict.reason ?? 'stage not admissible');
+    }
+
+    try {
+      // Stage 7 folds in everything collected so far.
+      const execTarget =
+        stage === 'normalize' ? ({ ...state.target, _findings: state.aggregated } as DeepAuditTarget) : state.target;
+      const raw = await adapter.exec(execTarget);
+      const findings = adapter.normalize(raw);
+      st.findingCount = findings.length;
+      st.status = 'done';
+      if (stage === 'normalize') {
+        // prioritized + deduped set replaces the raw aggregate
+        state.findings = findings;
+      } else {
+        state.aggregated.push(...findings);
+        if (i === DEEP_AUDIT_STAGES.length - 1) state.findings = findings;
+      }
+      if (i === DEEP_AUDIT_STAGES.length - 1) {
+        if (!state.findings.length) state.findings = state.aggregated;
+        state.finishedAt = new Date().toISOString();
+      }
+    } catch (err) {
+      st.status = 'failed';
+      st.error = err instanceof Error ? err.message : String(err);
+      state.error = st.error;
+      state.finishedAt = new Date().toISOString();
+      throw err;
+    }
+    return state;
+  }
+
+  /** Run all 7 stages IN ORDER, one call. Refuses production targets before stage 1. */
+  async run(id: string, target: DeepAuditTarget): Promise<DeepAuditRunState> {
+    let state = this.initState(id, target);
+    for (const stage of DEEP_AUDIT_STAGES) {
+      state = await this.runStage(state, stage);
+    }
     return state;
   }
 }

@@ -7,9 +7,25 @@ import {
   type DeepAuditReport,
   type DeepAuditRunState,
   type DeepAuditStage,
+  type DeepAuditStageAdapter,
   type DeepAuditTarget,
   DEEP_AUDIT_STAGES,
 } from '@platform/shared';
+import { RealCodeSastAdapter, RealHostLynisAdapter, RealTlsNetworkAdapter, RealStagingZapAdapter } from './real-adapters.js';
+
+/**
+ * Live adapter set: real tool execution where available, mock elsewhere
+ * (cms-advisory, artifact-malware — no scanner image in this repo yet).
+ */
+function liveAdapters(): Record<DeepAuditStage, DeepAuditStageAdapter> {
+  return {
+    ...createMockAdapters(),
+    'code-sast': new RealCodeSastAdapter(),
+    'host-lynis': new RealHostLynisAdapter(),
+    'tls-network': new RealTlsNetworkAdapter(),
+    'staging-zap': new RealStagingZapAdapter(),
+  };
+}
 
 /**
  * In-memory deep-audit run store (D1 common persistence/state).
@@ -52,36 +68,69 @@ export class DeepAuditStore {
 }
 
 /**
- * pg-boss wiring for the serialized pipeline (D3/D1). Real tool execution is
- * CI-deferred — `handleStageJob` runs the mock adapter set so the queue path
- * is exercisable; CI swaps `createMockAdapters()` for live tool adapters.
+ * pg-boss wiring for the serialized pipeline (D1/D3). Each `deep-audit.stage`
+ * job runs exactly ONE stage against the persisted run state, then enqueues
+ * the next stage itself — true serialization (never more than one stage for
+ * a given audit in flight) and crash-safe resume (pg-boss redelivers the
+ * same in-flight job on worker death; `runStage` is idempotent on a stage
+ * already marked `done`). Real tool execution is per-stage — `liveAdapters()`
+ * uses live adapters where they exist (code-sast today), mock elsewhere.
  */
 export class DeepAuditQueue {
-  constructor(private readonly boss: PgBoss) {}
+  private readonly adapters: Record<DeepAuditStage, DeepAuditStageAdapter>;
+
+  constructor(
+    private readonly boss: PgBoss,
+    private readonly store: DeepAuditStore,
+    adapters?: Record<DeepAuditStage, DeepAuditStageAdapter>
+  ) {
+    this.adapters = adapters ?? liveAdapters();
+  }
 
   /** The serialized order the pipeline MUST dispatch in. */
   static dispatchOrder(): readonly DeepAuditStage[] {
     return DEEP_AUDIT_STAGES;
   }
 
-  /** Enqueue all 7 stages IN ORDER. Returns the job ids in stage order. */
+  /** Enqueue ONLY the first stage; each stage chains to the next on completion. */
   async enqueuePipeline(auditId: string, target: DeepAuditTarget): Promise<string[]> {
-    const ids: string[] = [];
-    for (const stage of DEEP_AUDIT_STAGES) {
-      const id = await this.boss.send('deep-audit.stage', { auditId, stage, target });
-      if (!id) throw new Error(`failed to enqueue deep-audit stage: ${stage}`);
-      ids.push(id);
-    }
-    return ids;
+    const first = DEEP_AUDIT_STAGES[0]!;
+    const id = await this.boss.send('deep-audit.stage', { auditId, stage: first, target });
+    if (!id) throw new Error(`failed to enqueue deep-audit stage: ${first}`);
+    return [id];
   }
 
-  /** CI-deferred consumer: run one stage and return normalized findings. */
-  async handleStageJob(payload: { auditId: string; stage: DeepAuditStage; target: DeepAuditTarget }): Promise<{
+  /**
+   * Runs exactly one stage, persists the updated state/report, and enqueues
+   * the next stage (nothing to enqueue after the last).
+   */
+  async handleStageJob(payload: {
+    auditId: string;
     stage: DeepAuditStage;
-    findings: unknown[];
-  }> {
-    const orch = new DeepAuditOrchestrator({ adapters: createMockAdapters() });
-    const state = await orch.run(payload.auditId, payload.target);
-    return { stage: payload.stage, findings: state.findings };
+    target: DeepAuditTarget;
+  }): Promise<{ stage: DeepAuditStage; done: boolean }> {
+    const entry = this.store.get(payload.auditId);
+    if (!entry) throw new Error(`deep-audit run ${payload.auditId} not found`);
+
+    const orch = new DeepAuditOrchestrator({ adapters: this.adapters });
+    const state = entry.state ?? orch.initState(payload.auditId, payload.target);
+    const i = DEEP_AUDIT_STAGES.indexOf(payload.stage);
+    // Redelivery of an already-completed stage: runStage is a no-op, and the
+    // next stage was already enqueued the first time — never enqueue twice.
+    const alreadyDone = state.stages[i]!.status === 'done';
+    const updated = await orch.runStage(state, payload.stage);
+    this.store.setResult(payload.auditId, updated);
+
+    const isLast = i === DEEP_AUDIT_STAGES.length - 1;
+    if (!isLast && !alreadyDone) {
+      const next = DEEP_AUDIT_STAGES[i + 1]!;
+      const nextId = await this.boss.send('deep-audit.stage', {
+        auditId: payload.auditId,
+        stage: next,
+        target: payload.target,
+      });
+      if (!nextId) throw new Error(`failed to enqueue deep-audit stage: ${next}`);
+    }
+    return { stage: payload.stage, done: isLast };
   }
 }

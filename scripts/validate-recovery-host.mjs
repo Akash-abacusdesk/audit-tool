@@ -19,7 +19,7 @@ for (const path of ['backups', 'wal']) {
   }
 }
 
-for (const path of ['backup.env.example', 'bin/backup-recovery-host.sh', 'bin/verify-recovery-backups.sh', 'bin/restore-vaultwarden.sh']) {
+for (const path of ['backup.env.example', 'bin/backup-recovery-host.sh', 'bin/verify-recovery-backups.sh', 'bin/restore-recovery-host.sh']) {
   if (!existsSync(join(dir, path))) {
     console.error(`missing recovery-host ${path}`);
     process.exit(1);

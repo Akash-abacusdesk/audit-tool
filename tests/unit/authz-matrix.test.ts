@@ -17,11 +17,11 @@ import {
 } from '../../packages/shared/src/index.js';
 
 const EXPECTED_ALLOW: Record<Role, readonly string[]> = {
-  manager: ['audit.read', 'example.create', 'example.read', 'git.manage', 'git.read', 'org.manage', 'project.manage', 'scheduler.manage', 'scheduler.read', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.request', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
-  team_lead: ['example.create', 'example.read', 'git.manage', 'git.read', 'project.manage', 'role.assign', 'finding.read', 'finding.update', 'scan.ingest', 'jit.request', 'jit.approve'],
+  manager: ['audit.read', 'audit.deep', 'staging.manage', 'example.create', 'example.read', 'git.manage', 'git.read', 'org.manage', 'project.manage', 'scheduler.manage', 'scheduler.read', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.request', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
+  team_lead: ['staging.manage', 'example.create', 'example.read', 'git.manage', 'git.read', 'project.manage', 'role.assign', 'finding.read', 'finding.update', 'scan.ingest', 'jit.request', 'jit.approve'],
   project_coordinator: ['example.create', 'example.read', 'git.read', 'finding.read'],
   developer: ['example.read', 'git.read', 'finding.read', 'jit.request'],
-  security_admin: ['audit.read', 'role.assign', 'scheduler.manage', 'scheduler.read', 'user.manage', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
+  security_admin: ['audit.read', 'audit.deep', 'role.assign', 'scheduler.manage', 'scheduler.read', 'user.manage', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
 };
 
 const ORG = 'o1';

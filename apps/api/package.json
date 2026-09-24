@@ -14,6 +14,7 @@
     "@platform/shared": "*",
     "@platform/prodctl": "*",
     "@platform/worker-runtime": "*",
+    "@platform/scanner": "*",
     "fastify": "^5.0.0",
     "pg": "^8.13.0",
     "pg-boss": "^12.27.0"

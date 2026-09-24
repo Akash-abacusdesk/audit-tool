@@ -5,6 +5,7 @@ import {
   deepAuditTarget,
   isProductionTarget,
   ok,
+  DEEP_AUDIT_STAGES,
   type DeepAuditTarget,
 } from '@platform/shared';
 import { recordAudit } from '../auth/audit.js';
@@ -38,8 +39,10 @@ export async function deepAuditRoutes(app: FastifyInstance, deps: Deps): Promise
       }
 
       const auditId = deepAuditStore.create(target);
-      const queue = new DeepAuditQueue(deps.boss);
-      const jobIds = await queue.enqueuePipeline(auditId, target);
+      const queue = new DeepAuditQueue(deps.boss, deepAuditStore);
+      // enqueuePipeline dispatches only the first stage; each stage chains to
+      // the next itself (queue.ts) — the pipeline still runs all 7 in order.
+      await queue.enqueuePipeline(auditId, target);
 
       await recordAudit(deps.pool, {
         actorId: req.actor!.user.id,
@@ -49,11 +52,11 @@ export async function deepAuditRoutes(app: FastifyInstance, deps: Deps): Promise
         environmentId: target.environmentId,
         resource: `deep-audit:${auditId}`,
         requestId: req.id,
-        details: { stages: jobIds.length, environment: target.environment },
+        details: { stages: DEEP_AUDIT_STAGES.length, environment: target.environment },
       });
 
       return reply.status(202).send(
-        ok({ auditId, stages: jobIds.length, environment: target.environment, queued: true })
+        ok({ auditId, stages: DEEP_AUDIT_STAGES.length, environment: target.environment, queued: true })
       );
     }
   );

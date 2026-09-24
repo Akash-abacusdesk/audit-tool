@@ -14,7 +14,6 @@
     "test:integration": "node scripts/integration.mjs",
     "validate:recovery-host": "node scripts/validate-recovery-host.mjs",
     "dev:api": "npm run dev -w @platform/api",
-    "dev:portal": "npm run dev -w @platform/portal",
     "migrate": "npm run migrate -w @platform/api",
     "up": "docker compose -f infrastructure/docker-compose.dev.yml --env-file infrastructure/.env up -d",
     "down": "docker compose -f infrastructure/docker-compose.dev.yml down"
