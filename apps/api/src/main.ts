@@ -1,5 +1,5 @@
 import { loadConfig } from './config.js';
-import { JOB, webhookReceivedPayload, type DeepAuditStage, type DeepAuditTarget } from '@platform/shared';
+import { AnthropicRemediationProvider, JOB, webhookReceivedPayload, type DeepAuditStage, type DeepAuditTarget } from '@platform/shared';
 import { createPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { startBoss } from './plugins/pgboss.js';
@@ -10,6 +10,7 @@ import { Scheduler } from './scheduler/scheduler.js';
 import { startOrphanSweeper } from '@platform/worker-runtime';
 import { deepAuditStore } from './routes/deep-audit.js';
 import { DeepAuditQueue } from './deep-audit/queue.js';
+import { PgRemediationStore } from './ai-remediation/pg-store.js';
 
 /**
  * Boot path: config → pool → migrations → pg-boss (+ workers) → HTTP → graceful shutdown.
@@ -94,8 +95,24 @@ async function main(): Promise<void> {
   await startWebhookRetention(boss.inner, pool);
   bootAt('retention scheduled');
 
+  // S20-D1: AI remediation provider. `null` unless both an API key and a
+  // model are configured — every dev/test/CI environment runs without a live
+  // AI-provider dependency, and the workload class is disabled by default
+  // regardless (SCHED_AI_REMEDIATION_DISABLED), so an unconfigured deploy
+  // simply can't reach this even if someone flips the class on by mistake.
+  const aiModel = process.env.AI_REMEDIATION_MODEL;
+  const aiProvider =
+    process.env.ANTHROPIC_API_KEY && aiModel
+      ? new AnthropicRemediationProvider({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+          model: aiModel,
+          allowedModels: (process.env.AI_REMEDIATION_ALLOWED_MODELS ?? aiModel).split(',').map((m) => m.trim()),
+        })
+      : null;
+  const remediationStore = new PgRemediationStore(pool);
+
   // S4A: workload-class queues, admission control, scheduler workers.
-  const scheduler = new Scheduler({ boss: boss.inner, pool });
+  const scheduler = new Scheduler({ boss: boss.inner, pool, aiProvider, remediationStore });
   await scheduler.start();
   bootAt('scheduler started');
   bootAt('pre-buildApp');
@@ -103,7 +120,7 @@ async function main(): Promise<void> {
   const sweeper = startOrphanSweeper();
   bootAt('orphan sweeper started');
 
-  const app = await buildApp({ pool, boss: boss.inner, bossStarted: true, scheduler });
+  const app = await buildApp({ pool, boss: boss.inner, bossStarted: true, scheduler, remediationStore });
   bootAt('buildApp returned');
   await app.listen({ port: cfg.port, host: '0.0.0.0' });
   bootAt('listening');

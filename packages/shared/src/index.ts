@@ -17,3 +17,4 @@ export * from './deep-audit.js';
 export * from './staging.js';
 export * from './update-state.js';
 export * from './vaultwarden-client.js';
+export * from './ai-provider.js';

@@ -107,8 +107,26 @@ export const scanJobPayload = z.object({
 
 export type ScanJobPayload = z.infer<typeof scanJobPayload>;
 
+/**
+ * AI-remediation-shaped job (S20-D1): human-triggered, finding-scoped
+ * synthetic patch generation. `requestId` is the api_ai_remediation_requests
+ * row this job fills in — the route creates it before enqueueing so the
+ * developer can poll status even if the worker hasn't picked it up yet.
+ */
+export const aiRemediationJobPayload = z.object({
+  kind: z.literal('ai_remediation'),
+  requestId: z.string().uuid(),
+  findingId: z.string().uuid(),
+  findingSummary: z.string().min(1).max(2000),
+  codeContext: z.string().max(20_000),
+  stackMetadata: z.string().max(2000).optional(),
+  projectPolicy: z.string().max(2000).optional(),
+});
+
+export type AiRemediationJobPayload = z.infer<typeof aiRemediationJobPayload>;
+
 /** Payload union as consumed by handleJobs (routed on the `kind` field). */
-export type SchedulerJobPayload = ScanJobPayload | DemoJobPayload;
+export type SchedulerJobPayload = ScanJobPayload | AiRemediationJobPayload | DemoJobPayload;
 
 /** Pure spec composer — unit-testable without touching the runtime/docker. */
 export function buildWorkerSpec(

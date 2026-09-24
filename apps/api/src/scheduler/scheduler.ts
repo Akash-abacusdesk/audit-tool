@@ -1,8 +1,9 @@
 import type { Pool } from 'pg';
 import type { JobWithMetadata, PgBoss } from 'pg-boss';
-import { ApiError } from '@platform/shared';
+import { ApiError, type AiRemediationProvider } from '@platform/shared';
 import { cancel, getActiveRunIds, profileForTool, runWorkerJob } from '@platform/worker-runtime';
 import {
+  aiRemediationJobPayload,
   buildWorkerSpec,
   demoJobPayload,
   findWorkloadClass,
@@ -22,10 +23,20 @@ import {
   type AdmissionThresholds,
   type AdmissionVerdict,
 } from './admission.js';
+import type { RemediationStore } from '../ai-remediation/store.js';
 
 export interface SchedulerDeps {
   boss: PgBoss;
   pool: Pool;
+  /**
+   * S20-D1: AI remediation is disabled by default (SCHED_AI_REMEDIATION_DISABLED,
+   * classes.ts) so `null` here is the normal, safe default — every dev/test/CI
+   * environment runs without a live AI-provider dependency even if the class
+   * were flipped on. A queued ai_remediation job with no provider configured
+   * fails closed (marked 'failed', never silently dropped).
+   */
+  aiProvider?: AiRemediationProvider | null;
+  remediationStore?: RemediationStore;
 }
 
 export interface SchedulerTransition {
@@ -272,6 +283,16 @@ export class Scheduler {
         await this.runScanJob(job.id, parsedScan.data);
         continue;
       }
+      const declaredAiRemediation = (job.data as { kind?: unknown } | null)?.kind === 'ai_remediation';
+      if (declaredAiRemediation) {
+        const parsed = aiRemediationJobPayload.safeParse(job.data ?? {});
+        if (!parsed.success) {
+          console.warn(`[scheduler] bad ai_remediation payload on ${job.name}:`, JSON.stringify(job.data));
+          throw new Error(`invalid ai_remediation payload: ${parsed.error.message.slice(0, 200)}`);
+        }
+        await this.runAiRemediationJob(parsed.data);
+        continue;
+      }
       const parsedDemo = demoJobPayload.safeParse(job.data ?? {});
       if (!parsedDemo.success) {
         console.warn(`[scheduler] bad demo payload on ${job.name}:`, JSON.stringify(job.data));
@@ -304,6 +325,35 @@ export class Scheduler {
       }
     } finally {
       this.activeRuns.delete(jobId);
+    }
+  }
+
+  /**
+   * Calls the configured AI provider and persists the result. Fails closed:
+   * no provider configured or no store wired is a hard error (marked
+   * 'failed' on the request when a store exists), never a silent no-op.
+   */
+  private async runAiRemediationJob(payload: { requestId: string; findingId: string; findingSummary: string; codeContext: string; stackMetadata?: string; projectPolicy?: string }): Promise<void> {
+    const store = this.deps.remediationStore;
+    if (!this.deps.aiProvider) {
+      const msg = 'ai_remediation job received but no AI provider is configured';
+      if (store) await store.markFailed(payload.requestId, msg);
+      throw new Error(msg);
+    }
+    if (store) await store.markRunning(payload.requestId);
+    try {
+      const result = await this.deps.aiProvider.generatePatch({
+        findingId: payload.findingId,
+        findingSummary: payload.findingSummary,
+        codeContext: payload.codeContext,
+        stackMetadata: payload.stackMetadata,
+        projectPolicy: payload.projectPolicy,
+      });
+      if (store) await store.markCompleted(payload.requestId, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (store) await store.markFailed(payload.requestId, msg);
+      throw err;
     }
   }
 }

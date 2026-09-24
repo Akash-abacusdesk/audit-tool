@@ -20,7 +20,9 @@ import { secretsRoutes } from './routes/secrets.js';
 import { deepAuditRoutes } from './routes/deep-audit.js';
 import { stagingRoutes } from './routes/staging.js';
 import { updateRoutes } from './routes/update.js';
+import { remediationRoutes } from './routes/remediation.js';
 import type { Scheduler } from './scheduler/scheduler.js';
+import type { RemediationStore } from './ai-remediation/store.js';
 
 export interface AppDeps {
   pool: Pool;
@@ -28,6 +30,8 @@ export interface AppDeps {
   bossStarted: boolean;
   /** S4A scheduler; absent in minimal boots (old tests) — routes skip then. */
   scheduler?: Scheduler;
+  /** S20 shared instance — main.ts also hands this to Scheduler so job completion writes land where the route reads. */
+  remediationStore?: RemediationStore;
 }
 
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
@@ -140,6 +144,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     });
     bt('register:scheduler done');
   }
+  // S20-D1: developer-triggered, finding-scoped AI remediation.
+  await app.register(remediationRoutes, {
+    prefix: '/api/v1',
+    pool: deps.pool,
+    scheduler: deps.scheduler,
+    remediationStore: deps.remediationStore,
+  });
+  bt('register:remediation done');
 
   return app;
 }
