@@ -7,6 +7,7 @@
  * handlers throw FORBIDDEN on any illegal move (fail-closed), and no staging
  * validation may begin until staging is ready (the S11 safety gate).
  */
+import { z } from 'zod';
 import { ApiError } from './errors.js';
 
 export const UPDATE_STATES = [
@@ -86,3 +87,21 @@ export function transitionUpdate(
   }
   return next;
 }
+
+// ---- pg-boss job payloads for the three events that trigger real work ----
+// (snapshot = take a restore point, stage = begin staging validation,
+// promote = execute the production update). Every other event is a pure
+// state transition reported back by a human approval or a validator/worker.
+
+export const updateSnapshotPayload = z.object({
+  updateUnitId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  environmentId: z.string().uuid(),
+});
+export type UpdateSnapshotPayload = z.infer<typeof updateSnapshotPayload>;
+
+export const updateStagePayload = z.object({ updateUnitId: z.string().uuid() });
+export type UpdateStagePayload = z.infer<typeof updateStagePayload>;
+
+export const updatePromotePayload = z.object({ updateUnitId: z.string().uuid() });
+export type UpdatePromotePayload = z.infer<typeof updatePromotePayload>;

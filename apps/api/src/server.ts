@@ -19,6 +19,7 @@ import { telegramRoutes } from './routes/telegram.js';
 import { secretsRoutes } from './routes/secrets.js';
 import { deepAuditRoutes } from './routes/deep-audit.js';
 import { stagingRoutes } from './routes/staging.js';
+import { updateRoutes } from './routes/update.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 
 export interface AppDeps {
@@ -127,6 +128,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // S11-D1: safe ephemeral staging lifecycle (provision/test-run/destroy).
   await app.register(stagingRoutes, { prefix: '/api/v1', pool: deps.pool, boss: deps.boss });
   bt('register:staging done');
+  // S13-D1: safe WordPress update engine (one unit at a time, staged, approved, promoted).
+  await app.register(updateRoutes, { prefix: '/api/v1', pool: deps.pool, boss: deps.boss });
+  bt('register:update done');
   // S4A: workload-class queues + admission control telemetry/job ops.
   if (deps.scheduler) {
     await app.register(schedulerRoutes, {

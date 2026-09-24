@@ -11,6 +11,9 @@ export const JOB = {
   stagingProvision: 'staging.provision',
   stagingTestRun: 'staging.test_run',
   stagingDestroy: 'staging.destroy',
+  updateSnapshot: 'update.snapshot',
+  updateStage: 'update.stage',
+  updatePromote: 'update.promote',
 } as const;
 
 export type JobName = (typeof JOB)[keyof typeof JOB];

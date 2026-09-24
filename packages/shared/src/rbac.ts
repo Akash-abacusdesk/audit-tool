@@ -35,6 +35,11 @@ export const PERMISSIONS = [
   // sanitized staging environment. The safety gate (§ staging.ts) is enforced
   // server-side regardless of this permission.
   'staging.manage',
+  // Section-13 safe WordPress update engine (S13): create/transition an
+  // update unit through its lifecycle (snapshot/stage/validate/approve/
+  // promote/rollback). The state machine (update-state.ts) enforces legal
+  // transitions server-side regardless of this permission.
+  'update.manage',
   'example.create',
   'example.read',
   // Section-3 git plane (S3-D1): connections/repo links/stack detections/
@@ -79,8 +84,8 @@ export type Permission = (typeof PERMISSIONS)[number];
  * (no business permissions); user management lives with security_admin alone.
  */
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  manager: ['org.manage', 'project.manage', 'audit.read', 'audit.deep', 'staging.manage', 'example.create', 'example.read', 'git.manage', 'git.read',   'scheduler.read', 'scheduler.manage', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.request', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
-  team_lead: ['project.manage', 'role.assign', 'staging.manage', 'example.create', 'example.read', 'git.manage', 'git.read', 'finding.read', 'finding.update', 'scan.ingest', 'jit.request', 'jit.approve'],
+  manager: ['org.manage', 'project.manage', 'audit.read', 'audit.deep', 'staging.manage', 'update.manage', 'example.create', 'example.read', 'git.manage', 'git.read',   'scheduler.read', 'scheduler.manage', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.request', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
+  team_lead: ['project.manage', 'role.assign', 'staging.manage', 'update.manage', 'example.create', 'example.read', 'git.manage', 'git.read', 'finding.read', 'finding.update', 'scan.ingest', 'jit.request', 'jit.approve'],
   project_coordinator: ['example.create', 'example.read', 'git.read', 'finding.read'],
   developer: ['example.read', 'git.read', 'finding.read', 'jit.request'],
   security_admin: ['user.manage', 'role.assign', 'audit.read', 'audit.deep', 'scheduler.read', 'scheduler.manage',   'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
