@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './engine.js';
 export * from './registry.js';
+export * from './egress.js';
 export { loadProfiles, loadProfile, profileForTool } from './profiles.js';
 export { runWorkerJob, cancel } from './runner.js';
 export {

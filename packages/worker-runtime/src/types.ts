@@ -21,9 +21,11 @@ export interface ResourceLimits {
 }
 
 /** offline = per-run INTERNAL docker network (no external route, natively enforced). */
-/** bridge = per-run bridge with NAT. ponytail: egress allowlist enforcement
- *  (host iptables DOCKER-USER on Linux) is a follow-up before the Section-5
- *  abuse battery; on Windows dev this mode has unrestricted egress. */
+/** bridge = per-run bridge with NAT. Optionally CIDR-scoped via `allowlist` —
+ *  host DOCKER-USER iptables rules (Linux only; a no-op elsewhere — egress
+ *  stays unrestricted on non-Linux dev, unchanged from before). Rules are
+ *  scoped to this run's own network subnet and removed on teardown, so
+ *  concurrent runs never share or leak each other's allow-list. */
 export type EgressMode = 'offline' | 'bridge';
 
 export interface WorkerRunSpec {
@@ -41,7 +43,8 @@ export interface WorkerRunSpec {
   /** host dir mounted rw at /out — artifacts must survive teardown here */
   outDir: string;
   limits: ResourceLimits;
-  egress?: { mode: EgressMode };
+  /** allowlist: CIDRs the run's network may reach when mode is 'bridge' (offline never needs one). Omitted/empty = unrestricted bridge egress, the pre-existing behavior. */
+  egress?: { mode: EgressMode; allowlist?: readonly string[] };
   /**
    * REJECTED at pre-flight: the locked iface (god iface-lock v2) injects
    * PLATFORM_JOB_ID only. Kept in the type so misuse fails loudly with a

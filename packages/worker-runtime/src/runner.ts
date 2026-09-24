@@ -1,5 +1,6 @@
 import * as engine from './engine.js';
 import { registerRun, unregisterRun, lookupRun, getActiveRunIds } from './registry.js';
+import { applyEgressAllowlist, removeEgressRules, type IptablesRuleSpec } from './egress.js';
 import type { WorkerRunSpec, WorkerRunResult, ResourceLimits } from './types.js';
 
 export { getActiveRunIds };
@@ -79,6 +80,15 @@ export async function runWorkerJob(spec: WorkerRunSpec): Promise<WorkerRunResult
   const mode = spec.egress?.mode ?? 'offline';
 
   await engine.createNetwork(netName, { internal: mode === 'offline' });
+  // Egress allowlist (S4, Linux only, opt-in via spec.egress.allowlist): scope
+  // this run's own network subnet before the container can send a packet.
+  // A no-op — egressRules stays [] — on non-Linux or when no allowlist was
+  // requested, so bridge egress is exactly as unrestricted as before by default.
+  let egressRules: IptablesRuleSpec[] = [];
+  if (mode === 'bridge' && spec.egress?.allowlist?.length) {
+    const subnet = await engine.networkSubnet(netName);
+    if (subnet) egressRules = await applyEgressAllowlist(subnet, spec.egress.allowlist);
+  }
 
   const state: RunState = { watchdogFired: false, userCancelled: false, diskBreached: false };
   let timer: NodeJS.Timeout | undefined;
@@ -171,6 +181,7 @@ export async function runWorkerJob(spec: WorkerRunSpec): Promise<WorkerRunResult
     unregisterRun(spec.runId);
     // teardown by name — works even if create succeeded but start failed
     await engine.removeContainer(ctrName, true).catch(() => {});
+    if (egressRules.length) await removeEgressRules(egressRules).catch(() => {});
     await engine.removeNetwork(netName).catch(() => {});
   }
 }

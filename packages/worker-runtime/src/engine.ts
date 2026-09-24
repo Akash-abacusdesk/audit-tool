@@ -275,6 +275,14 @@ export async function listWorkerNetworks(labelFilter: string): Promise<NetworkRo
   }));
 }
 
+/** The subnet Docker auto-assigned a network, e.g. '172.20.0.0/16'. Null if unavailable (network gone, or IPAM not yet assigned). */
+export async function networkSubnet(name: string): Promise<string | null> {
+  const r = await execDocker(['network', 'inspect', name, '--format', '{{(index .IPAM.Config 0).Subnet}}']);
+  if (r.code !== 0) return null;
+  const subnet = r.stdout.trim();
+  return subnet || null;
+}
+
 export async function removeNetwork(name: string): Promise<void> {
   const r = await execDocker(['network', 'rm', name]);
   if (r.code !== 0 && !/not found|no such/i.test(r.stderr)) {
