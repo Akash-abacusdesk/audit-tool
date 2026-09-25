@@ -16,8 +16,9 @@ const WP_IMAGE = process.env.STAGING_WP_IMAGE ?? 'wordpress:6.6-apache';
 const DB_IMAGE = process.env.STAGING_DB_IMAGE ?? 'mysql:8';
 // ponytail: fixed password on a network scoped to this run alone, torn down with it — a
 // secrets-manager-issued per-run credential is the upgrade if staging networks ever
-// stop being single-tenant/ephemeral.
-const DB_PASSWORD = 'staging-ephemeral';
+// stop being single-tenant/ephemeral. Reused as-is by update/production.ts's
+// persistent stand-in, which carries the same caveat.
+export const DB_PASSWORD = 'staging-ephemeral';
 
 export interface StagingRuntime {
   networkName: string;
@@ -31,7 +32,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Ask the OS for a free host port instead of guessing one. */
-async function freePort(): Promise<number> {
+export async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
     srv.listen(0, '127.0.0.1', () => {
@@ -43,7 +44,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-async function waitForMysql(container: string, timeoutMs = 60_000): Promise<void> {
+export async function waitForMysql(container: string, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const r = await execDocker(['exec', container, 'mysqladmin', 'ping', '-h', 'localhost', `-p${DB_PASSWORD}`, '--silent']);
@@ -53,7 +54,7 @@ async function waitForMysql(container: string, timeoutMs = 60_000): Promise<void
   throw new Error(`mysql in ${container} did not become ready within ${timeoutMs}ms`);
 }
 
-async function waitForHttp(port: number, timeoutMs = 90_000): Promise<void> {
+export async function waitForHttp(port: number, timeoutMs = 90_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
