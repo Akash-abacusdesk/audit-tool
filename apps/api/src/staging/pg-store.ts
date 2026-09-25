@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { ApiError, transitionStaging, type StagingEvent, type StagingState } from '@platform/shared';
-import type { StagingStore, StagingStoreEntry } from './queue.js';
+import type { StagingRuntimeRecord, StagingStore, StagingStoreEntry } from './queue.js';
 
 interface Row {
   id: string;
@@ -9,6 +9,7 @@ interface Row {
   ref: string;
   state: StagingState;
   created_at: Date;
+  runtime: StagingRuntimeRecord | null;
 }
 
 function toEntry(r: Row): StagingStoreEntry {
@@ -19,6 +20,7 @@ function toEntry(r: Row): StagingStoreEntry {
     ref: r.ref,
     state: r.state,
     createdAt: r.created_at.toISOString(),
+    runtime: r.runtime,
   };
 }
 
@@ -38,7 +40,7 @@ export class PgStagingStore implements StagingStore {
 
   async get(id: string): Promise<StagingStoreEntry | null> {
     const res = await this.pool.query<Row>(
-      `SELECT id, project_id, environment_id, ref, state, created_at FROM api_staging_runs WHERE id = $1`,
+      `SELECT id, project_id, environment_id, ref, state, created_at, runtime FROM api_staging_runs WHERE id = $1`,
       [id]
     );
     return res.rows[0] ? toEntry(res.rows[0]) : null;
@@ -50,5 +52,13 @@ export class PgStagingStore implements StagingStore {
     const next = transitionStaging(entry.state, event);
     await this.pool.query(`UPDATE api_staging_runs SET state = $2, updated_at = now() WHERE id = $1`, [id, next]);
     return next;
+  }
+
+  async setRuntime(id: string, runtime: StagingRuntimeRecord): Promise<void> {
+    const res = await this.pool.query(
+      `UPDATE api_staging_runs SET runtime = $2, updated_at = now() WHERE id = $1`,
+      [id, JSON.stringify(runtime)]
+    );
+    if (res.rowCount === 0) throw new ApiError('NOT_FOUND', `staging ${id} not found`);
   }
 }

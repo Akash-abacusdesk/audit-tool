@@ -11,6 +11,10 @@ import { startOrphanSweeper } from '@platform/worker-runtime';
 import { deepAuditStore } from './routes/deep-audit.js';
 import { DeepAuditQueue } from './deep-audit/queue.js';
 import { PgRemediationStore } from './ai-remediation/pg-store.js';
+import { PgStagingStore } from './staging/pg-store.js';
+import { StagingWorker } from './staging/worker.js';
+import { PgUpdateStore } from './update/pg-store.js';
+import { UpdateWorker } from './update/worker.js';
 
 /**
  * Boot path: config → pool → migrations → pg-boss (+ workers) → HTTP → graceful shutdown.
@@ -88,6 +92,46 @@ async function main(): Promise<void> {
         console.error('[worker] deep-audit.stage:', data.stage, err instanceof Error ? err.message : err);
       }
     }
+  });
+  // S11-D2: staging provisioner — real ephemeral WP+MySQL containers.
+  const stagingStoreForWorker = new PgStagingStore(pool);
+  const stagingWorker = new StagingWorker(boss.inner, stagingStoreForWorker);
+  for (const q of [JOB.stagingProvision, JOB.stagingTestRun, JOB.stagingDestroy]) {
+    try {
+      await boss.inner.createQueue(q);
+    } catch {
+      // already exists
+    }
+  }
+  await boss.inner.work(JOB.stagingProvision, async (jobs) => {
+    for (const job of jobs) await stagingWorker.handleProvision(job.data as never);
+  });
+  await boss.inner.work(JOB.stagingTestRun, async (jobs) => {
+    for (const job of jobs) await stagingWorker.handleTestRun(job.data as never);
+  });
+  await boss.inner.work(JOB.stagingDestroy, async (jobs) => {
+    for (const job of jobs) await stagingWorker.handleDestroy(job.data as never);
+  });
+
+  // S13-D2: update-unit workers — `stage` reuses the same real staging
+  // provisioner; `snapshot`/`promote` need a production WP host (Phase 3).
+  const updateStoreForWorker = new PgUpdateStore(pool);
+  const updateWorker = new UpdateWorker(boss.inner, updateStoreForWorker);
+  for (const q of [JOB.updateSnapshot, JOB.updateStage, JOB.updatePromote]) {
+    try {
+      await boss.inner.createQueue(q);
+    } catch {
+      // already exists
+    }
+  }
+  await boss.inner.work(JOB.updateSnapshot, async (jobs) => {
+    for (const job of jobs) await updateWorker.handleSnapshot(job.data as never);
+  });
+  await boss.inner.work(JOB.updateStage, async (jobs) => {
+    for (const job of jobs) await updateWorker.handleStage(job.data as never);
+  });
+  await boss.inner.work(JOB.updatePromote, async (jobs) => {
+    for (const job of jobs) await updateWorker.handlePromote(job.data as never);
   });
   bootAt('worker registered');
 

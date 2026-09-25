@@ -22,6 +22,13 @@ import {
   type StagingState,
 } from '@platform/shared';
 
+export interface StagingRuntimeRecord {
+  networkName: string;
+  dbContainer: string;
+  wpContainer: string;
+  hostPort: number;
+}
+
 export interface StagingStoreEntry {
   id: string;
   projectId: string;
@@ -29,6 +36,7 @@ export interface StagingStoreEntry {
   ref: string;
   state: StagingState;
   createdAt: string;
+  runtime: StagingRuntimeRecord | null;
 }
 
 export interface StagingStore {
@@ -36,6 +44,8 @@ export interface StagingStore {
   get(id: string): Promise<StagingStoreEntry | null>;
   /** Apply a lifecycle event to a known staging id; throws on unknown id/illegal transition. */
   apply(id: string, event: StagingEvent): Promise<StagingState>;
+  /** Record which containers/network back this run (D2), so test-run/destroy can find them. */
+  setRuntime(id: string, runtime: StagingRuntimeRecord): Promise<void>;
 }
 
 /** In-memory staging store — test/dev fallback. Production uses PgStagingStore (staging/pg-store.ts). */
@@ -51,6 +61,7 @@ export class InMemoryStagingStore implements StagingStore {
       ref,
       state: 'requested',
       createdAt: new Date().toISOString(),
+      runtime: null,
     });
     return id;
   }
@@ -64,6 +75,12 @@ export class InMemoryStagingStore implements StagingStore {
     if (!e) throw new ApiError('NOT_FOUND', `staging ${id} not found`);
     e.state = transitionStaging(e.state, event);
     return e.state;
+  }
+
+  async setRuntime(id: string, runtime: StagingRuntimeRecord): Promise<void> {
+    const e = this.runs.get(id);
+    if (!e) throw new ApiError('NOT_FOUND', `staging ${id} not found`);
+    e.runtime = runtime;
   }
 }
 
