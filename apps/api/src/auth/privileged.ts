@@ -161,6 +161,10 @@ export const ADMIN_URL_PREFIXES = [
   // Production-affecting human actions: command execution and update promotion.
   '/prod',
   '/update-units',
+  // Managing sites, the team that operates them, and their task queue.
+  '/sites',
+  '/team-members',
+  '/tasks',
 ] as const;
 
 export function isAdminUrl(rawUrl: string): boolean {

@@ -8,6 +8,10 @@ const API_BASE_URL = process.env.API_BASE_URL ?? 'http://127.0.0.1:3000';
 const nextConfig: NextConfig = {
   // Self-contained server output (no full node_modules) for a small runtime image.
   output: 'standalone',
+  // Next 16 dev otherwise writes AGENTS.md / CLAUDE.md into this app on every start.
+  agentRules: false,
+  // Dev only: let the HMR socket connect when the app is opened as 127.0.0.1 rather than localhost.
+  allowedDevOrigins: ['127.0.0.1'],
   experimental: { optimizePackageImports: ['motion'] },
   async headers() {
     const isProd = process.env.NODE_ENV === 'production';

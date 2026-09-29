@@ -13,7 +13,8 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen antialiased"><MotionProvider>{children}</MotionProvider></body>
+      {/* Browser extensions (Grammarly etc.) add attributes to <body> before hydration; that is not a bug in the page. */}
+      <body className="min-h-screen antialiased" suppressHydrationWarning><MotionProvider>{children}</MotionProvider></body>
     </html>
   );
 }

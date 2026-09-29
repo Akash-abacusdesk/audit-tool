@@ -24,6 +24,7 @@ import { deepAuditRoutes } from './routes/deep-audit.js';
 import { stagingRoutes } from './routes/staging.js';
 import { updateRoutes } from './routes/update.js';
 import { remediationRoutes } from './routes/remediation.js';
+import { siteRoutes } from './routes/sites.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 import type { RemediationStore } from './ai-remediation/store.js';
 
@@ -181,6 +182,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     });
     bt('register:scheduler done');
   }
+  // Sites, their owning team members, and the task outbox for scan-failure alerts.
+  await app.register(siteRoutes, { prefix: '/api/v1', pool: deps.pool, scheduler: deps.scheduler });
+  bt('register:sites done');
   // S20-D1: developer-triggered, finding-scoped AI remediation.
   await app.register(remediationRoutes, {
     prefix: '/api/v1',

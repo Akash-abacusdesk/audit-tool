@@ -26,7 +26,9 @@ import {
 } from './admission.js';
 import type { RemediationStore } from '../ai-remediation/store.js';
 import type { Queryable } from '../auth/audit.js';
-import { asBossDb } from '../db/pool.js';
+import { asBossDb, withTx } from '../db/pool.js';
+import { dispatchAlert, raiseScanFailure } from '../sites/alerts.js';
+import { taskDelivery } from '../tasks/portal.js';
 import type { TelegramClient } from '@platform/shared';
 
 export interface SchedulerDeps {
@@ -287,7 +289,14 @@ export class Scheduler {
           console.warn(`[scheduler] bad scan payload on ${job.name}:`, JSON.stringify(job.data));
           throw new Error(`invalid scan payload: ${parsedScan.error.message.slice(0, 200)}`);
         }
-        await this.runScanJob(job.id, job.name, parsedScan.data);
+        try {
+          await this.runScanJob(job.id, job.name, parsedScan.data);
+        } catch (err) {
+          // pg-boss retries until retryCount reaches retryLimit; only the LAST failure is worth an alert.
+          const finalAttempt = job.retryCount >= (job.retryLimit ?? 0);
+          if (finalAttempt && parsedScan.data.projectId) await this.alertScanFailure(job.id, parsedScan.data, err);
+          throw err;
+        }
         continue;
       }
       const declaredAiRemediation = (job.data as { kind?: unknown } | null)?.kind === 'ai_remediation';
@@ -351,6 +360,27 @@ export class Scheduler {
     } finally {
       clearInterval(watcher);
       this.activeRuns.delete(jobId);
+    }
+  }
+
+  /** Best-effort: an alert problem must never mask the scan failure that triggered it. */
+  private async alertScanFailure(jobId: string, scan: Extract<SchedulerJobPayload, { kind: 'scan' }>, err: unknown): Promise<void> {
+    try {
+      const raised = await withTx(this.deps.pool, (tx) =>
+        raiseScanFailure(tx, {
+          projectId: scan.projectId!,
+          scanId: scan.scanId ?? jobId,
+          tool: scan.tool,
+          status: 'failed',
+          reason: err instanceof Error ? err.message : String(err),
+        })
+      );
+      if (raised) {
+        await dispatchAlert(this, raised);
+        await taskDelivery.kick();
+      }
+    } catch (e) {
+      console.error('[scheduler] could not raise the scan-failure alert:', e instanceof Error ? e.message : e);
     }
   }
 

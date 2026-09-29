@@ -107,6 +107,9 @@ export const scanJobPayload = z.object({
   workspaceDir: z.string().optional(),
   outDir: z.string().min(1),
   egressMode: z.enum(['offline', 'bridge']).default('offline'),
+  /** when set, a scan that fails on its final attempt alerts the site's owner and admins (sites/alerts.ts). */
+  projectId: z.string().uuid().optional(),
+  scanId: z.string().min(1).max(64).optional(),
 });
 
 export type ScanJobPayload = z.infer<typeof scanJobPayload>;

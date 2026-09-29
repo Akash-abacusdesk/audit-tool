@@ -7,8 +7,12 @@ import { AnimatePresence } from 'motion/react';
 import type { MeResponse } from '@platform/shared';
 import { apiFetch } from '../lib/api';
 import { clearToken } from '../lib/session';
+import StepUpDialog from './StepUpDialog';
 
 const NAV = [
+  { href: '/sites', label: 'Sites' },
+  { href: '/team', label: 'Team' },
+  { href: '/tasks', label: 'Tasks' },
   { href: '/findings', label: 'Findings' },
   { href: '/scans', label: 'Scans' },
   { href: '/jit', label: 'JIT Access' },
@@ -94,6 +98,7 @@ export function AppShell({ me, children }: { me: MeResponse; children: React.Rea
           </motion.div>
         </AnimatePresence>
       </main>
+      <StepUpDialog />
     </div>
   );
 }

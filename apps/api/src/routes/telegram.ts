@@ -42,7 +42,7 @@ const BODY_LIMIT = Number(process.env.TELEGRAM_BODY_LIMIT_BYTES ?? 10_485_760);
  * delivery primitive ready for that to be built on top of.
  */
 export const telegramClient: TelegramClient | null = process.env.TELEGRAM_BOT_TOKEN
-  ? new TelegramClient({ botToken: process.env.TELEGRAM_BOT_TOKEN })
+  ? new TelegramClient({ botToken: process.env.TELEGRAM_BOT_TOKEN, baseUrl: process.env.TELEGRAM_API_BASE_URL })
   : null;
 
 /**

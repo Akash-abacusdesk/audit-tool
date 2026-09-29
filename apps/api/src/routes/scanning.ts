@@ -25,6 +25,8 @@ import { recordAudit } from '../auth/audit.js';
 import { assertScope, requirePermission } from '../auth/service.js';
 import { withTx } from '../db/pool.js';
 import { enqueueCriticalFindingAlerts } from '../notifications/outbox.js';
+import { dispatchAlert, raiseScanFailure, type RaisedAlert } from '../sites/alerts.js';
+import { taskDelivery } from '../tasks/portal.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 
 interface Deps {
@@ -254,6 +256,18 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
           ]
         );
         const runId = run.rows[0]!.id;
+        // A failed/incomplete scan alerts the site's owner and the admins and registers a task - atomically with the run.
+        const alert: RaisedAlert | null =
+          env.status === 'completed'
+            ? null
+            : await raiseScanFailure(tx, {
+                projectId: env.project_id,
+                scanId: env.scan_id,
+                tool: env.tool.name,
+                status: env.status === 'failed' ? 'failed' : 'partial',
+                reason: env.error_summary ?? null,
+                runId,
+              });
         const newCritical: { id: string; title: string; ruleId: string | null }[] = [];
 
         // One multi-row upsert per chunk instead of a round trip per finding (a large trivy scan is thousands).
@@ -349,10 +363,16 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
             [idemEndpoint, key, JSON.stringify(dto)]
           );
         }
-        return { dto, newCritical };
+        return { dto, newCritical, alert };
       });
 
       if ('replay' in result) return reply.status(202).send(ok(result.replay));
+
+      // Committed: hand the new alert rows to the Telegram and task workers (safe to fail: the reconciler re-sends).
+      if (result.alert) {
+        await dispatchAlert(deps.scheduler, result.alert);
+        await taskDelivery.kick();
+      }
 
       // S9 call site: alert on newly-discovered critical findings only (not
       // re-seen ones) — post-commit, so a notification failure never rolls
