@@ -8,7 +8,7 @@ import {
   type SecretsStore,
   type SecretScope,
 } from '@platform/shared';
-import { requirePermission } from '../auth/service.js';
+import { assertScope, requirePermission } from '../auth/service.js';
 import { PgSecretsStore } from '../secrets/pg-store.js';
 
 interface Deps {
@@ -68,16 +68,20 @@ export async function secretsRoutes(app: FastifyInstance, deps: Deps): Promise<v
       });
       // Hard policy: scanner workers must never read Vaultwarden secrets through this API.
       assertNotDirectVaultwarden(key);
+      // requirePermission is a coarse union-over-all-bindings gate; re-check
+      // the actor actually holds secret.read.scoped AT THIS orgId/project/env,
+      // not just somewhere — otherwise any org grants cross-tenant access.
+      await assertScope(req, scope, 'secret.read', 'secret.read.scoped');
       const value = await secretsStore.get(scope, key);
       if (value === null) throw new ApiError('NOT_FOUND', `secret ${key} not found in scope`);
       return { ok: true as const, data: { key, value } };
     }
   );
 
-  // Scoped upsert — same permission; used by the control plane to stage secrets.
+  // Scoped upsert — needs secret.write.scoped; used by the control plane to stage secrets.
   app.put(
     '/secrets/:orgId/:key',
-    { preHandler: requirePermission('secret.read.scoped') },
+    { preHandler: requirePermission('secret.write.scoped') },
     async (req) => {
       const { orgId, key } = req.params as { orgId: string; key: string };
       const scope = parseScope({
@@ -86,6 +90,7 @@ export async function secretsRoutes(app: FastifyInstance, deps: Deps): Promise<v
         environmentId: (req.query as { environmentId?: string })?.environmentId,
       });
       assertNotDirectVaultwarden(key);
+      await assertScope(req, scope, 'secret.put', 'secret.write.scoped');
       const b = (req.body ?? {}) as { value?: unknown };
       if (typeof b.value !== 'string') throw new ApiError('VALIDATION_ERROR', 'value (string) is required');
       await secretsStore.put(scope, key, b.value);
@@ -109,6 +114,7 @@ export async function secretsRoutes(app: FastifyInstance, deps: Deps): Promise<v
         projectId: (req.query as { projectId?: string })?.projectId,
         environmentId: (req.query as { environmentId?: string })?.environmentId,
       });
+      await assertScope(req, scope, 'secret.read.vaultwarden', 'secret.read.scoped');
       const value = await vaultwardenClient.get(scope, key);
       if (value === null) throw new ApiError('NOT_FOUND', `secret ${key} not found in scope`);
       return { ok: true as const, data: { key, value } };

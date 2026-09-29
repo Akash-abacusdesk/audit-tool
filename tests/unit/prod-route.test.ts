@@ -21,7 +21,9 @@ import { prodRoutes } from '../../apps/api/src/routes/prod.js';
 const ORG = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 
-function makePool(role = 'manager') {
+const APPROVAL = '33333333-3333-4333-8333-333333333333';
+
+function makePool(role = 'manager', approvalValid = true) {
   const auditCalls: unknown[][] = [];
   const pool = {
     query: async (sql: string, params?: unknown[]) => {
@@ -34,6 +36,10 @@ function makePool(role = 'manager') {
       if (sql.includes('api_role_bindings')) {
         return { rows: [{ role, org_id: ORG, project_id: null, environment_id: null }], rowCount: 1 };
       }
+      if (sql.includes('prod_approvals')) {
+        if (sql.startsWith('INSERT')) return { rows: [{ id: APPROVAL, expires_at: new Date() }], rowCount: 1 };
+        return { rows: approvalValid ? [{ id: APPROVAL }] : [], rowCount: approvalValid ? 1 : 0 };
+      }
       if (sql.includes('api_audit_events')) {
         auditCalls.push(params ?? []);
         return { rows: [], rowCount: 1 };
@@ -44,8 +50,8 @@ function makePool(role = 'manager') {
   return { pool, auditCalls };
 }
 
-async function buildApp(role = 'manager') {
-  const { pool, auditCalls } = makePool(role);
+async function buildApp(role = 'manager', approvalValid = true) {
+  const { pool, auditCalls } = makePool(role, approvalValid);
   const app = Fastify({
     logger: false,
     genReqId: (req) => {
@@ -65,7 +71,7 @@ const baseHeaders = {
   'content-type': 'application/json',
 };
 
-const validPayload = { op: 'deploy', target: 'web', scope: { orgId: ORG }, approvalId: 'appr-1' };
+const validPayload = { op: 'deploy', target: 'web', scope: { orgId: ORG }, approvalId: APPROVAL };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -87,7 +93,28 @@ describe('S7-D1 prod-control route', () => {
     const p = auditCalls[0];
     expect(p[1]).toBe('prod.action');
     expect(p[7]).toBe('req-1');
-    expect((JSON.parse(p[8] as string) as { approvalId: string }).approvalId).toBe('appr-1');
+    expect((JSON.parse(p[8] as string) as { approvalId: string }).approvalId).toBe(APPROVAL);
+  });
+
+  it('refuses a command whose approval is missing/used/mismatched (403) and never executes', async () => {
+    const { app } = await buildApp('manager', false);
+    const res = await app.inject({ method: 'POST', url: '/api/v1/prod/commands', headers: baseHeaders, payload: JSON.stringify(validPayload) });
+    expect(res.statusCode).toBe(403);
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-uuid approvalId (422)', async () => {
+    const { app } = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/api/v1/prod/commands', headers: baseHeaders, payload: JSON.stringify({ ...validPayload, approvalId: 'appr-1' }) });
+    expect(res.statusCode).toBe(422);
+    expect(executeCommand).not.toHaveBeenCalled();
+  });
+
+  it('POST /prod/approvals records an approval bound to the command (201)', async () => {
+    const { app } = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/api/v1/prod/approvals', headers: baseHeaders, payload: JSON.stringify({ op: 'deploy', target: 'web', scope: { orgId: ORG } }) });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().approvalId).toBe(APPROVAL);
   });
 
   it('rejects an invalid body (missing approvalId) with 400', async () => {
@@ -108,7 +135,7 @@ describe('S7-D1 prod-control route', () => {
       method: 'POST',
       url: '/api/v1/prod/commands',
       headers: baseHeaders,
-      payload: JSON.stringify({ op: 'deploy', target: 'web', scope: { orgId: OTHER }, approvalId: 'appr-1' }),
+      payload: JSON.stringify({ op: 'deploy', target: 'web', scope: { orgId: OTHER }, approvalId: APPROVAL }),
     });
     expect(res.statusCode).toBe(403);
     expect(executeCommand).not.toHaveBeenCalled();

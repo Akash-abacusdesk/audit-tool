@@ -24,12 +24,31 @@ export async function startWebhookRetention(boss: PgBoss, pool: Pool): Promise<v
     // already scheduled
   }
   await boss.work(RETENTION_QUEUE, async () => {
-    const r = await pool.query(
-      `DELETE FROM api_webhook_events WHERE received_at < now() - ($1 || ' days')::interval`,
-      [String(days)]
-    );
-    if ((r.rowCount ?? 0) > 0) {
-      console.log(`[retention] pruned ${r.rowCount} webhook events older than ${days}d`);
-    }
+    const window = (d: number) => String(d);
+    await prune(pool, 'webhook events', 'api_webhook_events', `received_at < now() - ($1 || ' days')::interval`, window(days));
+    // Bounded-growth tables that had no purge at all. api_audit_events is deliberately absent: the app role
+    // has no DELETE on it (append-only) - retire old audit rows by partition/owner job instead.
+    const sessionDays = window(Number(process.env.SESSION_RETENTION_DAYS ?? 7));
+    await prune(pool, 'dead sessions', 'api_sessions',
+      `LEAST(expires_at, COALESCE(revoked_at, expires_at)) < now() - ($1 || ' days')::interval`, sessionDays);
+    await prune(pool, 'idempotency keys', 'api_idempotency_keys',
+      `created_at < now() - ($1 || ' days')::interval`, window(Number(process.env.IDEMPOTENCY_RETENTION_DAYS ?? 7)));
+    await prune(pool, 'sent notifications', 'notification_outbox',
+      `status = 'sent' AND created_at < now() - ($1 || ' days')::interval`, window(Number(process.env.OUTBOX_RETENTION_DAYS ?? 30)));
   });
+}
+
+/** Delete in small batches so a large backlog never holds one long lock or bloats WAL in a single statement. */
+async function prune(pool: Pool, label: string, table: string, cond: string, param: string): Promise<void> {
+  const BATCH = 5000;
+  let total = 0;
+  for (;;) {
+    const r = await pool.query(
+      `DELETE FROM ${table} WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${cond} LIMIT ${BATCH})`,
+      [param]
+    );
+    total += r.rowCount ?? 0;
+    if ((r.rowCount ?? 0) < BATCH) break;
+  }
+  if (total > 0) console.log(`[retention] pruned ${total} ${label}`);
 }

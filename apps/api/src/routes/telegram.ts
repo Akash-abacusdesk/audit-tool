@@ -9,7 +9,9 @@ import {
   type TelegramAuthorizationDto,
   type TelegramCallbackIngestResult,
 } from '@platform/shared';
-import { requirePermission } from '../auth/service.js';
+import { assertScope, requirePermission } from '../auth/service.js';
+import { orgsWith } from '../auth/scope.js';
+import { hdr } from '../util/http.js';
 import {
   authorizeTelegramCallback,
   isStale,
@@ -27,11 +29,6 @@ interface Deps {
 
 interface RawBodyRequest extends FastifyRequest {
   rawBody?: Buffer;
-}
-
-function hdr(req: FastifyRequest, name: string): string | undefined {
-  const v = req.headers[name];
-  return Array.isArray(v) ? v[0] : v;
 }
 
 const MAX_AGE_MS = Number(process.env.TELEGRAM_MAX_AGE_MIN ?? 10) * 60_000;
@@ -181,6 +178,17 @@ export async function telegramRoutes(app: FastifyInstance, deps: Deps): Promise<
     } satisfies TelegramCallbackIngestResult);
   });
 
+  /** telegram.manage must hold at the binding's own scope; an unscoped (platform-wide) binding needs it at org level somewhere. */
+  async function assertTelegramScope(
+    req: FastifyRequest,
+    orgId: string | null,
+    projectId?: string | null,
+    environmentId?: string | null
+  ): Promise<void> {
+    if (orgId) return assertScope(req, { orgId, projectId, environmentId }, 'telegram.authorization', 'telegram.manage');
+    if (orgsWith(req, 'telegram.manage').length === 0) throw new ApiError('FORBIDDEN', 'unscoped binding needs org-level telegram.manage');
+  }
+
   // ---- Management (RBAC-gated): maintain the per-(chat,user) allow-list ----
 
   app.post(
@@ -189,6 +197,7 @@ export async function telegramRoutes(app: FastifyInstance, deps: Deps): Promise<
     async (req) => {
       const input = telegramAuthorizationInput.parse(req.body);
       const actor = req.actor!;
+      await assertTelegramScope(req, input.scope?.orgId ?? null, input.scope?.projectId, input.scope?.environmentId);
       const res = await deps.pool.query<TelegramAuthorizationDto>(
         `INSERT INTO telegram_authorizations
            (bot_id, chat_id, user_id, actions, org_id, project_id, environment_id, created_by)
@@ -230,8 +239,9 @@ export async function telegramRoutes(app: FastifyInstance, deps: Deps): Promise<
     { preHandler: requirePermission('telegram.manage') },
     async (req) => {
       const q = req.query as { bot_id?: string; chat_id?: string; include_revoked?: string };
-      const clauses: string[] = [];
-      const params: unknown[] = [];
+      // Tenant fence: unscoped (platform-wide) rows plus rows of orgs the actor manages.
+      const params: unknown[] = [orgsWith(req, 'telegram.manage')];
+      const clauses: string[] = ['(org_id IS NULL OR org_id = ANY($1::uuid[]))'];
       if (typeof q.bot_id === 'string') {
         params.push(q.bot_id);
         clauses.push(`bot_id = $${params.length}`);
@@ -258,6 +268,13 @@ export async function telegramRoutes(app: FastifyInstance, deps: Deps): Promise<
     { preHandler: requirePermission('telegram.manage') },
     async (req) => {
       const id = (req.params as { id: string }).id;
+      const found = await deps.pool.query<{ org_id: string | null; project_id: string | null; environment_id: string | null }>(
+        'SELECT org_id::text, project_id::text, environment_id::text FROM telegram_authorizations WHERE id = $1::uuid',
+        [id]
+      );
+      const f = found.rows[0];
+      if (!f) throw new ApiError('NOT_FOUND', 'authorization not found or already revoked');
+      await assertTelegramScope(req, f.org_id, f.project_id, f.environment_id);
       const res = await deps.pool.query<{ id: string }>(
         `UPDATE telegram_authorizations SET revoked_at = now()
          WHERE id = $1::uuid AND revoked_at IS NULL

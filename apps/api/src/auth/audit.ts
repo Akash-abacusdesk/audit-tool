@@ -46,6 +46,8 @@ export interface AuditFilter {
   orgId?: string;
   projectId?: string;
   environmentId?: string;
+  /** Tenant fence: only events belonging to these orgs (plus pre-auth platform events). */
+  visibleOrgs?: string[];
   from?: Date;
   to?: Date;
 }
@@ -53,12 +55,12 @@ export interface AuditFilter {
 /** Compose the WHERE clause + positional params for audit-event listing. */
 export function buildAuditWhere(
   f: AuditFilter,
-  cursor: { at: Date; id: string } | null
+  cursor: { at: Date | string; id: string } | null
 ): { where: string; params: unknown[] } {
   const frags: string[] = [];
   const params: unknown[] = [];
   if (cursor) {
-    params.push(cursor.at.toISOString(), cursor.id);
+    params.push(typeof cursor.at === 'string' ? cursor.at : cursor.at.toISOString(), cursor.id);
     frags.push(`(created_at, id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
   }
   if (f.actorId) {
@@ -84,6 +86,16 @@ export function buildAuditWhere(
   if (f.environmentId) {
     params.push(f.environmentId);
     frags.push(`environment_id = $${params.length}::uuid`);
+  }
+  if (f.visibleOrgs) {
+    params.push(f.visibleOrgs);
+    const p = `$${params.length}::uuid[]`;
+    frags.push(
+      `(org_id = ANY(${p})
+        OR project_id IN (SELECT id FROM api_projects WHERE org_id = ANY(${p}))
+        OR actor_id IN (SELECT user_id FROM api_role_bindings WHERE org_id = ANY(${p}))
+        OR (org_id IS NULL AND project_id IS NULL AND environment_id IS NULL AND actor_id IS NULL))`
+    );
   }
   if (f.from) {
     params.push(f.from.toISOString());

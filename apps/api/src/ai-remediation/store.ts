@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Queryable } from '../auth/audit.js';
 import type { AiRemediationResult } from '@platform/shared';
 
 export type RemediationRequestStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -20,7 +21,7 @@ export interface RemediationRequestEntry {
 }
 
 export interface RemediationStore {
-  create(findingId: string, projectId: string, environmentId: string | null, requestedBy: string): Promise<string>;
+  create(findingId: string, projectId: string, environmentId: string | null, requestedBy: string, db?: Queryable): Promise<string>;
   get(id: string): Promise<RemediationRequestEntry | null>;
   markRunning(id: string): Promise<void>;
   markCompleted(id: string, result: AiRemediationResult): Promise<void>;

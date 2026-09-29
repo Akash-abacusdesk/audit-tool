@@ -153,10 +153,14 @@ export const ADMIN_URL_PREFIXES = [
   '/projects',
   '/environments',
   '/audit-events',
+  '/security/lockdown',
   // S4VAL-1 (ruling B): scheduler plane carries privileged pair-tier ops
   // (enqueue/cancel arbitrary workloads) — same posture as the audit feed.
   // Internal probe endpoints live under /internal/… and stay outside this gate.
   '/scheduler',
+  // Production-affecting human actions: command execution and update promotion.
+  '/prod',
+  '/update-units',
 ] as const;
 
 export function isAdminUrl(rawUrl: string): boolean {

@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { Queryable } from '../auth/audit.js';
 import { ApiError, transitionStaging, type StagingEvent, type StagingState } from '@platform/shared';
 import type { StagingRuntimeRecord, StagingStore, StagingStoreEntry } from './queue.js';
 
@@ -28,8 +29,8 @@ function toEntry(r: Row): StagingStoreEntry {
 export class PgStagingStore implements StagingStore {
   constructor(private readonly pool: Pool) {}
 
-  async create(projectId: string, environmentId: string, ref: string): Promise<string> {
-    const res = await this.pool.query<{ id: string }>(
+  async create(projectId: string, environmentId: string, ref: string, db: Queryable = this.pool): Promise<string> {
+    const res = await (db as Pool).query<{ id: string }>(
       `INSERT INTO api_staging_runs (id, project_id, environment_id, ref, state)
        VALUES (gen_random_uuid(), $1, $2, $3, 'requested')
        RETURNING id`,
@@ -38,19 +39,20 @@ export class PgStagingStore implements StagingStore {
     return res.rows[0]!.id;
   }
 
-  async get(id: string): Promise<StagingStoreEntry | null> {
-    const res = await this.pool.query<Row>(
-      `SELECT id, project_id, environment_id, ref, state, created_at, runtime FROM api_staging_runs WHERE id = $1`,
+  async get(id: string, db: Queryable = this.pool, lock = false): Promise<StagingStoreEntry | null> {
+    const res = await (db as Pool).query<Row>(
+      `SELECT id, project_id, environment_id, ref, state, created_at, runtime FROM api_staging_runs WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
       [id]
     );
     return res.rows[0] ? toEntry(res.rows[0]) : null;
   }
 
-  async apply(id: string, event: StagingEvent): Promise<StagingState> {
-    const entry = await this.get(id);
+  async apply(id: string, event: StagingEvent, db: Queryable = this.pool): Promise<StagingState> {
+    // FOR UPDATE: two concurrent transitions on one run serialize instead of both reading the same state.
+    const entry = await this.get(id, db, true);
     if (!entry) throw new ApiError('NOT_FOUND', `staging ${id} not found`);
     const next = transitionStaging(entry.state, event);
-    await this.pool.query(`UPDATE api_staging_runs SET state = $2, updated_at = now() WHERE id = $1`, [id, next]);
+    await db.query(`UPDATE api_staging_runs SET state = $2, updated_at = now() WHERE id = $1`, [id, next]);
     return next;
   }
 

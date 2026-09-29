@@ -111,4 +111,16 @@ describe('S8-D1 WP event ingest', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().data.duplicate).toBe(false);
   });
+  it('rejects a body claiming a different site than the key holder (401)', async () => {
+    const { pool } = makePool();
+    const app = await buildApp(pool);
+    const raw = JSON.stringify({ ...body, site_id: 'other-site', delivery_id: 'd-forge' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/wp/mutation-events',
+      headers: { 'content-type': 'application/json', 'X-WP-Signature': sig(raw), 'X-WP-Site': SITE },
+      payload: raw,
+    });
+    expect(res.statusCode).toBe(401);
+  });
 });

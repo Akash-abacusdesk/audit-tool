@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import {
   ApiError,
+  assignableRolesFor,
   auditListQuery,
   environmentCreateInput,
   listQuery,
@@ -22,6 +23,7 @@ import {
 import { hashPassword } from '../auth/passwords.js';
 import { buildAuditWhere, recordAudit } from '../auth/audit.js';
 import { assertNotSelf, assertScope, requirePermission } from '../auth/service.js';
+import { orgsWith } from '../auth/scope.js';
 import { toBindingDto, toUserDto } from './auth.js';
 import { withTx } from '../db/pool.js';
 
@@ -29,13 +31,16 @@ interface Deps {
   pool: Pool;
 }
 
-/** Decode a base64 cursor "(created_at,id)" into its parts; null when absent. */
-function decodeCursor(cursor?: string): { at: Date; id: string } | null {
+/**
+ * Decode a base64 cursor "(created_at,id)"; null when absent. `at` is a timestamp string: either epoch-ms (users)
+ * or PG's own microsecond text form (audit events, whose rows written in one transaction share a created_at).
+ */
+function decodeCursor(cursor?: string): { at: string; id: string } | null {
   if (!cursor) return null;
   const raw = Buffer.from(cursor, 'base64url').toString('utf8');
-  const [atMs, id] = raw.split('|');
-  const at = new Date(Number(atMs));
-  if (!id || Number.isNaN(at.getTime())) throw new ApiError('VALIDATION_ERROR', 'bad cursor');
+  const [atRaw, id] = raw.split('|');
+  const at = /^\d+$/.test(atRaw ?? '') ? new Date(Number(atRaw)).toISOString() : atRaw;
+  if (!id || !at || !/^\d{4}-\d\d-\d\d[ T][\d:.]+([+-]\d\d(:\d\d)?|Z)?$/.test(at)) throw new ApiError('VALIDATION_ERROR', 'bad cursor');
   return { at, id };
 }
 
@@ -99,9 +104,11 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       created_at: Date;
     }>(
       `SELECT id::text, email, display_name, is_active, created_at FROM api_users
-       WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1::timestamptz, $2::uuid))
-       ORDER BY created_at DESC, id DESC LIMIT $3`,
-      [cur ? cur.at.toISOString() : null, cur?.id ?? null, limit + 1]
+       WHERE ($1::timestamptz IS NULL OR (date_trunc('milliseconds', created_at), id) < ($1::timestamptz, $2::uuid))
+         AND (NOT EXISTS (SELECT 1 FROM api_role_bindings b WHERE b.user_id = api_users.id)
+              OR EXISTS (SELECT 1 FROM api_role_bindings b WHERE b.user_id = api_users.id AND b.org_id = ANY($4::uuid[])))
+       ORDER BY date_trunc('milliseconds', created_at) DESC, id DESC LIMIT $3`,
+      [cur ? cur.at : null, cur?.id ?? null, limit + 1, orgsWith(req, 'user.manage')]
     );
     const items = rows.rows.slice(0, limit).map(toUserDto);
     let nextCursor: string | null = null;
@@ -121,8 +128,10 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     }
     await assertNotSelf(req, id, 'user.update');
     const found = await deps.pool.query<Parameters<typeof toUserDto>[0]>(
-      'SELECT id::text, email, display_name, is_active, created_at FROM api_users WHERE id = $1',
-      [id]
+      `SELECT id::text, email, display_name, is_active, created_at FROM api_users
+       WHERE id = $1 AND (NOT EXISTS (SELECT 1 FROM api_role_bindings b WHERE b.user_id = api_users.id)
+              OR EXISTS (SELECT 1 FROM api_role_bindings b WHERE b.user_id = api_users.id AND b.org_id = ANY($2::uuid[])))`,
+      [id, orgsWith(req, 'user.manage')]
     );
     const row = found.rows[0];
     if (!row) throw new ApiError('NOT_FOUND', `user ${id} not found`);
@@ -167,6 +176,18 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       'role.grant',
       'role.assign'
     );
+
+    // Privilege ceiling: role.assign lets you delegate, not escalate — you
+    // can only grant a role your own binding(s) at this scope are permitted
+    // to grant (e.g. team_lead cannot hand out manager/security_admin).
+    const assignable = assignableRolesFor(req.actor!.bindings, {
+      orgId: b.orgId,
+      projectId: b.projectId ?? null,
+      environmentId: b.environmentId ?? null,
+    });
+    if (!assignable.has(b.role)) {
+      throw new ApiError('FORBIDDEN', `not permitted to grant role ${b.role} at this scope`);
+    }
 
     if (b.environmentId !== undefined) {
       const parent = await deps.pool.query<{ org_id: string }>(
@@ -265,11 +286,25 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       throw new ApiError('VALIDATION_ERROR', 'invalid request body', parsed.error.flatten());
     }
     try {
-      const inserted = await deps.pool.query<{ id: string; name: string; slug: string; created_at: Date }>(
-        'INSERT INTO api_orgs (name, slug) VALUES ($1, $2) RETURNING id::text, name, slug, created_at',
-        [parsed.data.name, parsed.data.slug]
-      );
-      const r = inserted.rows[0]!;
+      // The creator is bound in the new tenant with the roles they already hold at org level elsewhere (never
+      // more): role.assign forbids self-binding, so without this the sole admin could not see the new org's
+      // users/audit through the org fences - while an ordinary manager gains nothing they didn't have.
+      const r = await withTx(deps.pool, async (tx) => {
+        const inserted = await tx.query<{ id: string; name: string; slug: string; created_at: Date }>(
+          'INSERT INTO api_orgs (name, slug) VALUES ($1, $2) RETURNING id::text, name, slug, created_at',
+          [parsed.data.name, parsed.data.slug]
+        );
+        const org = inserted.rows[0]!;
+        const roles = new Set(req.actor!.bindings.filter((b) => !b.projectId && !b.environmentId).map((b) => b.role));
+        for (const role of roles) {
+          await tx.query('INSERT INTO api_role_bindings (user_id, role, org_id) VALUES ($1, $2, $3)', [
+            req.actor!.user.id,
+            role,
+            org.id,
+          ]);
+        }
+        return org;
+      });
       await recordAudit(deps.pool, {
         actorId: req.actor!.user.id,
         action: 'org.create',
@@ -386,6 +421,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
         orgId: parsed.data.orgId,
         projectId: parsed.data.projectId,
         environmentId: parsed.data.environmentId,
+        visibleOrgs: orgsWith(req, 'audit.read'),
         from: parsed.data.from,
         to: parsed.data.to,
       },
@@ -403,9 +439,10 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
       request_id: string | null;
       details: unknown;
       created_at: Date;
+      created_at_full: string;
     }>(
       `SELECT id::text, actor_id::text, action, result, org_id::text, project_id::text,
-              environment_id::text, resource, request_id, details, created_at
+              environment_id::text, resource, request_id, details, created_at, created_at::text AS created_at_full
        FROM api_audit_events
        WHERE ${where}
        ORDER BY created_at DESC, id DESC LIMIT $${params.length + 1}`,
@@ -427,7 +464,7 @@ export async function adminRoutes(app: FastifyInstance, deps: Deps): Promise<voi
     let nextCursor: string | null = null;
     if (rows.rows.length > limit) {
       const last = rows.rows[limit - 1]!;
-      nextCursor = Buffer.from(`${last.created_at.getTime()}|${last.id}`).toString('base64url');
+      nextCursor = Buffer.from(`${last.created_at_full}|${last.id}`).toString('base64url');
     }
     return ok({ items, nextCursor } satisfies Page<AuditEventDto>);
   });

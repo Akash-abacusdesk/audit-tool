@@ -2,8 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { ApiError, isUuid, ok } from '@platform/shared';
 import { requirePermission } from '../auth/service.js';
 import { recordAudit } from '../auth/audit.js';
+import { assertProjectScope } from '../auth/scope.js';
 import { InMemoryRemediationStore, type RemediationStore } from '../ai-remediation/store.js';
 import { PgRemediationStore } from '../ai-remediation/pg-store.js';
+import { withTx } from '../db/pool.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 
 interface Deps {
@@ -51,32 +53,36 @@ export async function remediationRoutes(app: FastifyInstance, deps: Deps): Promi
         throw new ApiError('VALIDATION_ERROR', 'findingSummary and codeContext are required');
       }
       if (!deps.scheduler) throw new ApiError('UNAVAILABLE', 'scheduler not available');
+      await assertProjectScope(req, body.projectId, body.environmentId ?? null, 'remediation.request', 'finding.remediate');
 
-      const requestId = await remediationStore.create(
-        findingId,
-        body.projectId,
-        body.environmentId ?? null,
-        req.actor!.user.id
-      );
-      const jobId = await deps.scheduler.enqueue('ai_remediation', {
-        kind: 'ai_remediation',
-        requestId,
-        findingId,
-        findingSummary: body.findingSummary,
-        codeContext: body.codeContext,
-        stackMetadata: body.stackMetadata,
-        projectPolicy: body.projectPolicy,
-      });
-
-      await recordAudit(deps.pool, {
-        actorId: req.actor!.user.id,
-        action: 'remediation.request',
-        result: 'allow',
-        projectId: body.projectId,
-        environmentId: body.environmentId,
-        resource: `finding:${findingId}`,
-        requestId: req.id,
-        details: { remediationRequestId: requestId },
+      // Request row + job + audit commit together; a disabled class rolls the row back instead of orphaning it.
+      const scheduler = deps.scheduler;
+      const { requestId, jobId } = await withTx(deps.pool, async (tx) => {
+        const rid = await remediationStore.create(findingId, body.projectId!, body.environmentId ?? null, req.actor!.user.id, tx);
+        const jid = await scheduler.enqueue(
+          'ai_remediation',
+          {
+            kind: 'ai_remediation',
+            requestId: rid,
+            findingId,
+            findingSummary: body.findingSummary,
+            codeContext: body.codeContext,
+            stackMetadata: body.stackMetadata,
+            projectPolicy: body.projectPolicy,
+          },
+          tx
+        );
+        await recordAudit(tx, {
+          actorId: req.actor!.user.id,
+          action: 'remediation.request',
+          result: 'allow',
+          projectId: body.projectId,
+          environmentId: body.environmentId,
+          resource: `finding:${findingId}`,
+          requestId: req.id,
+          details: { remediationRequestId: rid },
+        });
+        return { requestId: rid, jobId: jid };
       });
 
       return reply.status(202).send(ok({ requestId, jobId, queued: true }));
@@ -90,6 +96,7 @@ export async function remediationRoutes(app: FastifyInstance, deps: Deps): Promi
       const { id } = req.params as { id: string };
       const entry = await remediationStore.get(id);
       if (!entry) throw new ApiError('NOT_FOUND', `remediation request ${id} not found`);
+      await assertProjectScope(req, entry.projectId, entry.environmentId, 'remediation.read', 'finding.remediate');
       return ok(entry);
     }
   );

@@ -10,6 +10,8 @@
  * by a human approval or a validator/worker — no job to enqueue.
  */
 import { randomUUID } from 'node:crypto';
+import type { Queryable } from '../auth/audit.js';
+import { asBossDb } from '../db/pool.js';
 import {
   ApiError,
   JOB,
@@ -39,11 +41,12 @@ export interface UpdateStore {
     environmentId: string,
     component: string,
     fromVersion: string,
-    toVersion: string
+    toVersion: string,
+    db?: Queryable
   ): Promise<string>;
-  get(id: string): Promise<UpdateUnitEntry | null>;
+  get(id: string, db?: Queryable): Promise<UpdateUnitEntry | null>;
   /** Apply a lifecycle event to a known update unit; throws on unknown id/illegal transition. */
-  apply(id: string, event: UpdateEvent, ctx?: TransitionContext): Promise<UpdateState>;
+  apply(id: string, event: UpdateEvent, ctx?: TransitionContext, db?: Queryable): Promise<UpdateState>;
 }
 
 /** In-memory update-unit store — test/dev fallback. Production uses PgUpdateStore (update/pg-store.ts). */
@@ -85,7 +88,7 @@ export class InMemoryUpdateStore implements UpdateStore {
 
 /** Minimal boss surface the orchestrator needs — PgBoss satisfies this. */
 export interface UpdateBoss {
-  send(queue: string, data: unknown): Promise<string | null>;
+  send(queue: string, data: unknown, options?: { db: ReturnType<typeof asBossDb> }): Promise<string | null>;
 }
 
 /** Events that trigger real work and which queue they enqueue to. */
@@ -106,13 +109,14 @@ export class UpdateOrchestrator {
     environmentId: string,
     component: string,
     fromVersion: string,
-    toVersion: string
+    toVersion: string,
+    db?: Queryable
   ): Promise<string> {
-    return this.store.create(projectId, environmentId, component, fromVersion, toVersion);
+    return this.store.create(projectId, environmentId, component, fromVersion, toVersion, db);
   }
 
-  async get(id: string): Promise<UpdateUnitEntry | null> {
-    return this.store.get(id);
+  async get(id: string, db?: Queryable): Promise<UpdateUnitEntry | null> {
+    return this.store.get(id, db);
   }
 
   /**
@@ -123,11 +127,13 @@ export class UpdateOrchestrator {
   async transition(
     id: string,
     event: UpdateEvent,
-    ctx?: TransitionContext
+    ctx?: TransitionContext,
+    db?: Queryable
   ): Promise<{ state: UpdateState; jobId: string | null }> {
-    const entry = await this.store.get(id);
+    // With `db` (a transaction) the state change and its job commit together (no stranded unit on a crash).
+    const entry = await this.store.get(id, db);
     if (!entry) throw new ApiError('NOT_FOUND', `update unit ${id} not found`);
-    const state = await this.store.apply(id, event, ctx);
+    const state = await this.store.apply(id, event, ctx, db);
 
     const queue = JOB_FOR_EVENT[event];
     if (!queue) return { state, jobId: null };
@@ -138,7 +144,7 @@ export class UpdateOrchestrator {
         : event === 'stage'
           ? updateStagePayload.parse({ updateUnitId: id })
           : updatePromotePayload.parse({ updateUnitId: id });
-    const jobId = await this.boss.send(queue, payload);
+    const jobId = await this.boss.send(queue, payload, db ? { db: asBossDb(db) } : undefined);
     return { state, jobId };
   }
 }

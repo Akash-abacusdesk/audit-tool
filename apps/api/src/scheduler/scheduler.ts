@@ -8,6 +8,7 @@ import {
   demoJobPayload,
   findWorkloadClass,
   loadWorkloadClasses,
+  notificationJobPayload,
   scanJobPayload,
   type SchedulerJobPayload,
   type WorkloadClass,
@@ -24,6 +25,9 @@ import {
   type AdmissionVerdict,
 } from './admission.js';
 import type { RemediationStore } from '../ai-remediation/store.js';
+import type { Queryable } from '../auth/audit.js';
+import { asBossDb } from '../db/pool.js';
+import type { TelegramClient } from '@platform/shared';
 
 export interface SchedulerDeps {
   boss: PgBoss;
@@ -37,6 +41,8 @@ export interface SchedulerDeps {
    */
   aiProvider?: AiRemediationProvider | null;
   remediationStore?: RemediationStore;
+  /** S9: outbound Telegram sends. `null`/absent when TELEGRAM_BOT_TOKEN is unset — notification jobs then fail closed (marked 'failed' on the outbox row) rather than silently dropping. */
+  telegramClient?: TelegramClient | null;
 }
 
 export interface SchedulerTransition {
@@ -112,9 +118,10 @@ export class Scheduler {
   }
 
   /** Enqueue a demo-envelope job onto a workload class queue. */
-  async enqueue(classKey: string, data: object): Promise<string | null> {
+  async enqueue(classKey: string, data: object, db?: Queryable): Promise<string | null> {
     const def = this.enabledOrThrow(classKey);
-    return this.deps.boss.send(def.queue, data);
+    // With `db` (a caller's transaction) the job is only visible to workers if that transaction commits.
+    return this.deps.boss.send(def.queue, data, db ? { db: asBossDb(db) } : undefined);
   }
 
   async cancelJob(classKey: string, jobId: string): Promise<void> {
@@ -280,7 +287,7 @@ export class Scheduler {
           console.warn(`[scheduler] bad scan payload on ${job.name}:`, JSON.stringify(job.data));
           throw new Error(`invalid scan payload: ${parsedScan.error.message.slice(0, 200)}`);
         }
-        await this.runScanJob(job.id, parsedScan.data);
+        await this.runScanJob(job.id, job.name, parsedScan.data);
         continue;
       }
       const declaredAiRemediation = (job.data as { kind?: unknown } | null)?.kind === 'ai_remediation';
@@ -291,6 +298,16 @@ export class Scheduler {
           throw new Error(`invalid ai_remediation payload: ${parsed.error.message.slice(0, 200)}`);
         }
         await this.runAiRemediationJob(parsed.data);
+        continue;
+      }
+      const declaredNotification = (job.data as { kind?: unknown } | null)?.kind === 'notification';
+      if (declaredNotification) {
+        const parsed = notificationJobPayload.safeParse(job.data ?? {});
+        if (!parsed.success) {
+          console.warn(`[scheduler] bad notification payload on ${job.name}:`, JSON.stringify(job.data));
+          throw new Error(`invalid notification payload: ${parsed.error.message.slice(0, 200)}`);
+        }
+        await this.runNotificationJob(parsed.data);
         continue;
       }
       const parsedDemo = demoJobPayload.safeParse(job.data ?? {});
@@ -313,10 +330,18 @@ export class Scheduler {
    * deliberately stopped); failed/timedOut runs throw so pg-boss retry policy
    * decides their fate.
    */
-  private async runScanJob(jobId: string, scan: Extract<SchedulerJobPayload, { kind: 'scan' }>): Promise<void> {
+  private async runScanJob(jobId: string, queue: string, scan: Extract<SchedulerJobPayload, { kind: 'scan' }>): Promise<void> {
     const limits = await profileForTool(scan.tool);
     const spec = buildWorkerSpec(jobId, scan, limits);
     this.activeRuns.set(jobId, spec.runId);
+    // cancelJob may be handled by ANOTHER replica, which can only mark the pg-boss row cancelled; the container
+    // lives here. Watch the row while the run is active and stop our own container when it flips.
+    const watcher = setInterval(() => {
+      void this.deps.boss
+        .findJobs<unknown>(queue, { id: jobId })
+        .then((found) => (found[0]?.state === 'cancelled' ? cancel(spec.runId) : undefined))
+        .catch(() => {});
+    }, Number(process.env.SCHED_CANCEL_POLL_MS ?? 3000));
     try {
       const result = await runWorkerJob(spec);
       if (result.cancelled || result.status === 'cancelled') return;
@@ -324,6 +349,7 @@ export class Scheduler {
         throw new Error(`worker run ${result.status} (exit=${result.exitCode}): ${result.logsTail.slice(-200)}`);
       }
     } finally {
+      clearInterval(watcher);
       this.activeRuns.delete(jobId);
     }
   }
@@ -353,6 +379,44 @@ export class Scheduler {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (store) await store.markFailed(payload.requestId, msg);
+      throw err;
+    }
+  }
+
+  /**
+   * Sends one pending outbox row. Fails closed: no telegramClient configured
+   * marks the row 'failed' (with a clear reason) rather than leaving it
+   * silently 'pending' forever.
+   */
+  private async runNotificationJob(payload: { outboxId: string }): Promise<void> {
+    const row = (
+      await this.deps.pool.query<{ id: string; chat_id: string; body: string; status: string }>(
+        `SELECT id, chat_id, body, status FROM notification_outbox WHERE id = $1::uuid`,
+        [payload.outboxId]
+      )
+    ).rows[0];
+    if (!row) throw new Error(`notification_outbox row ${payload.outboxId} not found`);
+    if (row.status === 'sent') return; // already delivered (e.g. redelivered job)
+
+    if (!this.deps.telegramClient) {
+      await this.deps.pool.query(
+        `UPDATE notification_outbox SET status = 'failed', error = $2 WHERE id = $1::uuid`,
+        [payload.outboxId, 'no TELEGRAM_BOT_TOKEN configured']
+      );
+      throw new Error('notification job received but no Telegram client is configured');
+    }
+    try {
+      await this.deps.telegramClient.sendMessage(row.chat_id, row.body);
+      await this.deps.pool.query(
+        `UPDATE notification_outbox SET status = 'sent', sent_at = now(), error = NULL WHERE id = $1::uuid`,
+        [payload.outboxId]
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await this.deps.pool.query(
+        `UPDATE notification_outbox SET status = 'failed', error = $2 WHERE id = $1::uuid`,
+        [payload.outboxId, msg]
+      );
       throw err;
     }
   }

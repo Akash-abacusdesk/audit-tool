@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import {
@@ -8,6 +7,7 @@ import {
   type WpEventIngestResult,
 } from '@platform/shared';
 import { recordAudit } from '../auth/audit.js';
+import { hdr, verifySha256Signature } from '../util/http.js';
 
 interface Deps {
   pool: Pool;
@@ -15,11 +15,6 @@ interface Deps {
 
 interface RawBodyRequest extends FastifyRequest {
   rawBody?: Buffer;
-}
-
-function hdr(req: FastifyRequest, name: string): string | undefined {
-  const v = req.headers[name];
-  return Array.isArray(v) ? v[0] : v;
 }
 
 // Reuse the webhook freshness knob — the envelope's occurred_at shares the
@@ -101,10 +96,7 @@ export async function wpEventRoutes(app: FastifyInstance, deps: Deps): Promise<v
       throw new ApiError('UNAUTHORIZED', 'invalid signature');
     }
 
-    const mac = createHmac('sha256', secret).update(raw).digest();
-    const hex = /^sha256=([0-9a-fA-F]{64})$/.exec(sig)?.[1];
-    const given = typeof hex === 'string' ? Buffer.from(hex, 'hex') : Buffer.alloc(0);
-    if (given.length !== mac.length || !timingSafeEqual(given, mac)) {
+    if (!verifySha256Signature(secret, raw, sig)) {
       await recordAudit(deps.pool, {
         actorId: null,
         action: 'wp.event.sig.deny',
@@ -131,12 +123,25 @@ export async function wpEventRoutes(app: FastifyInstance, deps: Deps): Promise<v
     }
     const env = parsed.data;
 
+    // A per-site key only vouches for its own site: the signed body may not claim another.
+    if (typeof siteId === 'string' && env.site_id !== siteId) {
+      await recordAudit(deps.pool, {
+        actorId: null,
+        action: 'wp.event.deny',
+        result: 'deny',
+        resource: `wp:${siteId}`,
+        requestId: req.id,
+        details: { reason: 'site-mismatch', claimed: env.site_id },
+      });
+      throw new ApiError('UNAUTHORIZED', 'invalid signature');
+    }
+
     // Layer 2 — advisory freshness window (the PK dedup is authoritative).
     // Dwight's transport sends x-wp-ts (epoch ms); check it at a tighter ~60s
     // window. Otherwise fall back to the envelope's occurred_at.
     if (typeof tsHeader === 'string') {
       const ts = Number(tsHeader);
-      if (!Number.isFinite(ts) || Date.now() - ts > TS_MAX_AGE_MS) {
+      if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > TS_MAX_AGE_MS) {
         await recordAudit(deps.pool, {
           actorId: null,
           action: 'wp.event.stale.deny',
@@ -149,7 +154,7 @@ export async function wpEventRoutes(app: FastifyInstance, deps: Deps): Promise<v
       }
     }
     const occurred = new Date(env.occurred_at).getTime();
-    if (!Number.isFinite(occurred) || Date.now() - occurred > MAX_AGE_MS) {
+    if (!Number.isFinite(occurred) || Date.now() - occurred > MAX_AGE_MS || occurred - Date.now() > TS_MAX_AGE_MS) {
       await recordAudit(deps.pool, {
         actorId: null,
         action: 'wp.event.stale.deny',

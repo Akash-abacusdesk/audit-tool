@@ -20,10 +20,15 @@ interface Row {
 
 /** Minimal stateful fake of api_staging_runs behind a real Pool shape. */
 function makePool(role = 'manager') {
+  const live = { on: false };
   const auditCalls: unknown[][] = [];
   const runs = new Map<string, Row>();
   const pool = {
     query: async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FROM api_projects')) return { rows: [{ org_id: ORG, env_ok: true }], rowCount: 1 };
+      if (sql.includes('FROM api_staging_runs') && sql.includes("'requested'")) {
+        return live.on ? { rows: [{ id: 'existing' }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
       if (sql.includes('api_sessions')) {
         return { rows: [{ session_id: 's1', id: 'u-mgr', email: 'm@x', display_name: 'M', is_active: true, created_at: new Date() }], rowCount: 1 };
       }
@@ -54,11 +59,13 @@ function makePool(role = 'manager') {
       return { rows: [], rowCount: 0 };
     },
   } as unknown as Pool;
-  return { pool, auditCalls, runs };
+  // routes now run their state change + job + audit in one transaction (withTx -> pool.connect)
+  (pool as unknown as { connect: unknown }).connect = async () => ({ query: pool.query.bind(pool), release: () => {} });
+  return { pool, auditCalls, runs, live };
 }
 
 async function buildApp(role = 'manager') {
-  const { pool, auditCalls, runs } = makePool(role);
+  const { pool, auditCalls, runs, live } = makePool(role);
   const boss = { send: vi.fn(async () => 'job-x') } as any;
   const app = Fastify({ logger: false, genReqId: (r) => (typeof r.headers['x-request-id'] === 'string' ? r.headers['x-request-id'] : 'fallback') });
   app.decorate('pool', pool);
@@ -68,12 +75,22 @@ async function buildApp(role = 'manager') {
   });
   await app.register(stagingRoutes, { prefix: '/api/v1', pool, boss });
   await app.ready();
-  return { app, auditCalls, boss, runs };
+  return { app, auditCalls, boss, runs, live };
 }
 
 const headers = { authorization: 'Bearer tok', 'x-request-id': 'req-1', 'content-type': 'application/json' };
 
 describe('S11-D1 staging routes', () => {
+  it('POST /staging refuses a second live run for the same environment (409)', async () => {
+    const { app, live } = await buildApp();
+    live.on = true;
+    const res = await app.inject({
+      method: 'POST', url: '/api/v1/staging', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' },
+      payload: JSON.stringify({ projectId: '22222222-2222-4222-8222-222222222222', environmentId: '33333333-3333-4333-8333-333333333333', ref: 'main' }),
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
   it('POST /staging provisions and enqueues (202)', async () => {
     const { app, boss } = await buildApp();
     const res = await app.inject({
@@ -84,7 +101,7 @@ describe('S11-D1 staging routes', () => {
     });
     expect(res.statusCode).toBe(202);
     expect(res.json().data.queued).toBe(true);
-    expect(boss.send).toHaveBeenCalledWith('staging.provision', expect.objectContaining({ ref: 'main' }));
+    expect(boss.send).toHaveBeenCalledWith('staging.provision', expect.objectContaining({ ref: 'main' }), expect.objectContaining({ db: expect.anything() }));
   });
 
   it('POST /staging rejects an actor lacking staging.manage (403)', async () => {

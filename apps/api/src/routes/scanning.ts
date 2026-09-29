@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import {
+  can,
+  isUuid,
   ApiError,
   ok,
   findingInput,
@@ -22,15 +24,15 @@ import {
 import { recordAudit } from '../auth/audit.js';
 import { assertScope, requirePermission } from '../auth/service.js';
 import { withTx } from '../db/pool.js';
+import { enqueueCriticalFindingAlerts } from '../notifications/outbox.js';
+import type { Scheduler } from '../scheduler/scheduler.js';
 
 interface Deps {
   pool: Pool;
+  scheduler?: Scheduler;
 }
 
 const ENDPOINT = 'POST /api/v1/scans/:scanId/findings';
-
-// severity → rank for lifecycle ordering (most severe first).
-const SEVERITY_RANK = `CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
 
 type FindingRow = {
   id: string;
@@ -124,13 +126,16 @@ function fingerprint(body: unknown): string {
   return createHash('sha256').update(JSON.stringify(body)).digest('hex');
 }
 
-function decodeFindingCursor(cursor?: string): { rank: number; at: Date; id: string } | null {
+/**
+ * `at` is PG's own microsecond-precision text form of created_at, not a JS Date: rows written by one ingest share a
+ * timestamp, and a millisecond cursor compared against microseconds silently skipped them across page boundaries.
+ */
+function decodeFindingCursor(cursor?: string): { rank: number; at: string; id: string } | null {
   if (!cursor) return null;
   try {
     const raw = Buffer.from(cursor, 'base64url').toString('utf8');
-    const [rank, atMs, id] = raw.split('|');
-    const at = new Date(Number(atMs));
-    if (!id || Number.isNaN(Number(rank)) || Number.isNaN(at.getTime())) throw new Error('bad');
+    const [rank, at, id] = raw.split('|');
+    if (!id || Number.isNaN(Number(rank)) || !at || !/^\d{4}-\d\d-\d\d[ T][\d:.]+([+-]\d\d(:\d\d)?|Z)?$/.test(at)) throw new Error('bad');
     return { rank: Number(rank), at, id };
   } catch {
     throw new ApiError('VALIDATION_ERROR', 'bad cursor');
@@ -181,6 +186,8 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
       }
 
       const key = req.headers['idempotency-key'];
+      // Keys are per caller: a replay must never return another actor's cached response.
+      const idemEndpoint = `${ENDPOINT}:${req.actor!.user.id}`;
       const fp = fingerprint(body);
 
       const result = await withTx(deps.pool, async (tx) => {
@@ -190,12 +197,12 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
              VALUES ($1, $2, $3, 202, 'null'::jsonb)
              ON CONFLICT (endpoint, key) DO NOTHING
              RETURNING request_fingerprint, response_body`,
-            [ENDPOINT, key, fp]
+            [idemEndpoint, key, fp]
           );
           if (reserved.rowCount === 0) {
             const existing = await tx.query<{ status_code: number; request_fingerprint: string; response_body: IngestResultDto }>(
               'SELECT status_code, request_fingerprint, response_body FROM api_idempotency_keys WHERE endpoint = $1 AND key = $2',
-              [ENDPOINT, key]
+              [idemEndpoint, key]
             );
             const row = existing.rows[0];
             if (!row) throw new ApiError('CONFLICT', 'idempotency key in flight');
@@ -245,16 +252,53 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
           ]
         );
         const runId = run.rows[0]!.id;
+        const newCritical: { id: string; title: string; ruleId: string | null }[] = [];
 
-        for (const f of accepted) {
-          await tx.query(
+        // One multi-row upsert per chunk instead of a round trip per finding (a large trivy scan is thousands).
+        // Duplicate fingerprints inside one statement would hit "cannot affect row a second time": last one wins.
+        const uniq = new Map<string, FindingInput>();
+        for (const f of accepted) uniq.set(f.finding_fingerprint, f);
+        const CAST = new Map([[16, '::jsonb'], [18, '::jsonb'], [19, '::jsonb'], [20, '::jsonb'], [21, '::jsonb']]);
+        const all = [...uniq.values()];
+        for (let i = 0; i < all.length; i += 200) {
+          const chunk = all.slice(i, i + 200);
+          const params: unknown[] = [];
+          const tuples = chunk.map((f) => {
+            const base = params.length;
+            params.push(
+              runId,
+              env.project_id,
+              env.environment_id ?? null,
+              f.finding_fingerprint,
+              f.rule_id ?? null,
+              f.title,
+              f.description ?? null,
+              f.severity,
+              f.native_severity ?? null,
+              f.confidence,
+              env.tool.name,
+              env.tool.version ?? null,
+              env.tool.image_digest ?? null,
+              env.target.ref ?? null,
+              env.target.branch ?? null,
+              f.location === undefined || f.location === null ? null : JSON.stringify(f.location),
+              f.evidence ?? null,
+              f.remediation === undefined ? null : JSON.stringify(f.remediation),
+              f.cve_ids === undefined ? null : JSON.stringify(f.cve_ids),
+              f.advisory_ids === undefined ? null : JSON.stringify(f.advisory_ids),
+              f.metadata === undefined ? null : JSON.stringify(f.metadata),
+              env.raw_artifact_path ?? null
+            );
+            const ph = Array.from({ length: 22 }, (_, k) => `$${base + k + 1}${CAST.get(k + 1) ?? ''}`);
+            return `(${ph.join(',')}, now(), now())`;
+          });
+          const inserted = await tx.query<{ id: string; finding_fingerprint: string; inserted: boolean }>(
             `INSERT INTO api_scan_findings
                (scan_run_id, project_id, environment_id, finding_fingerprint, rule_id, title,
                 description, severity, native_severity, confidence, scanner, scanner_version,
                 image_digest, target_ref, target_branch, location, evidence, remediation,
                 cve_ids, advisory_ids, metadata, raw_artifact_path, first_seen_at, last_seen_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                     $16::jsonb, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, now(), now())
+             VALUES ${tuples.join(',')}
              ON CONFLICT (project_id, finding_fingerprint) DO UPDATE SET
                scan_run_id     = EXCLUDED.scan_run_id,
                environment_id  = EXCLUDED.environment_id,
@@ -277,32 +321,16 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
                metadata        = EXCLUDED.metadata,
                raw_artifact_path = EXCLUDED.raw_artifact_path,
                last_seen_at    = now()
-               -- triaged columns (status/assigned_*/remediation_status/resolved_at) preserved`,
-            [
-              runId,
-              env.project_id,
-              env.environment_id ?? null,
-              f.finding_fingerprint,
-              f.rule_id ?? null,
-              f.title,
-              f.description ?? null,
-              f.severity,
-              f.native_severity ?? null,
-              f.confidence,
-              env.tool.name,
-              env.tool.version ?? null,
-              env.tool.image_digest ?? null,
-              env.target.ref ?? null,
-              env.target.branch ?? null,
-              f.location === undefined || f.location === null ? null : JSON.stringify(f.location),
-              f.evidence ?? null,
-              f.remediation === undefined ? null : JSON.stringify(f.remediation),
-              f.cve_ids === undefined ? null : JSON.stringify(f.cve_ids),
-              f.advisory_ids === undefined ? null : JSON.stringify(f.advisory_ids),
-              f.metadata === undefined ? null : JSON.stringify(f.metadata),
-              env.raw_artifact_path ?? null,
-            ]
+               -- triaged columns (status/assigned_*/remediation_status/resolved_at) preserved
+             RETURNING id::text, finding_fingerprint, (xmax = 0) AS inserted`,
+            params
           );
+          for (const row of inserted.rows) {
+            const f = uniq.get(row.finding_fingerprint);
+            if (row.inserted && f?.severity === 'critical') {
+              newCritical.push({ id: row.id, title: f.title, ruleId: f.rule_id ?? null });
+            }
+          }
         }
 
         const dto: IngestResultDto = {
@@ -316,13 +344,30 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
         if (typeof key === 'string' && key.length > 0) {
           await tx.query(
             'UPDATE api_idempotency_keys SET status_code = 202, response_body = $3 WHERE endpoint = $1 AND key = $2',
-            [ENDPOINT, key, JSON.stringify(dto)]
+            [idemEndpoint, key, JSON.stringify(dto)]
           );
         }
-        return { dto };
+        return { dto, newCritical };
       });
 
       if ('replay' in result) return reply.status(202).send(ok(result.replay));
+
+      // S9 call site: alert on newly-discovered critical findings only (not
+      // re-seen ones) — post-commit, so a notification failure never rolls
+      // back accepted findings.
+      for (let i = 0; i < result.newCritical.length; i += 10) {
+        await Promise.all(
+          result.newCritical.slice(i, i + 10).map((nc) =>
+            enqueueCriticalFindingAlerts(deps.pool, deps.scheduler, {
+              id: nc.id,
+              projectId: env.project_id,
+              title: nc.title,
+              ruleId: nc.ruleId,
+              targetRef: env.target.ref ?? null,
+            })
+          )
+        );
+      }
 
       await recordAudit(deps.pool, {
         actorId: req.actor!.user.id,
@@ -401,18 +446,18 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
     const cur = decodeFindingCursor(q.cursor);
     if (cur) {
       where.push(
-        `(${SEVERITY_RANK} > $${params.length + 1} OR (${SEVERITY_RANK} = $${params.length + 1} AND (f.created_at < $${params.length + 2}::timestamptz OR (f.created_at = $${params.length + 2}::timestamptz AND f.id < $${params.length + 3}::uuid))))`
+        `(f.severity_rank > $${params.length + 1} OR (f.severity_rank = $${params.length + 1} AND (f.created_at < $${params.length + 2}::timestamptz OR (f.created_at = $${params.length + 2}::timestamptz AND f.id < $${params.length + 3}::uuid))))`
       );
-      params.push(cur.rank, cur.at.toISOString(), cur.id);
+      params.push(cur.rank, cur.at, cur.id);
     }
     params.push(limit + 1);
     const limitIdx = params.length;
 
-    const rows = await deps.pool.query<FindingRow & { severity_rank: number }>(
-      `SELECT f.*, ${SEVERITY_RANK} AS severity_rank
+    const rows = await deps.pool.query<FindingRow & { severity_rank: number; created_at_full: string }>(
+      `SELECT f.*, f.created_at::text AS created_at_full
        FROM api_scan_findings f
        WHERE ${where.join(' AND ')}
-       ORDER BY ${SEVERITY_RANK} ASC, f.created_at DESC, f.id DESC
+       ORDER BY f.severity_rank ASC, f.created_at DESC, f.id DESC
        LIMIT $${limitIdx}`,
       params
     );
@@ -420,7 +465,7 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
     let nextCursor: string | null = null;
     if (rows.rows.length > limit) {
       const last = rows.rows[limit - 1]!;
-      nextCursor = Buffer.from(`${last.severity_rank}|${last.created_at.getTime()}|${last.id}`).toString('base64url');
+      nextCursor = Buffer.from(`${last.severity_rank}|${last.created_at_full}|${last.id}`).toString('base64url');
     }
     const page: Page<FindingDto> = { items, nextCursor };
     return ok(page);
@@ -616,7 +661,7 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
     const limit = typeof q.limit === 'string' && /^\d+$/.test(q.limit) ? Number(q.limit) : 50;
     const cur = typeof q.cursor === 'string' && q.cursor ? decodeRunCursor(q.cursor) : null;
     if (cur) {
-      where.push(`(r.created_at, r.id) < ($${params.length + 1}::timestamptz, $${params.length + 2}::uuid)`);
+      where.push(`(date_trunc('milliseconds', r.created_at), r.id) < ($${params.length + 1}::timestamptz, $${params.length + 2}::uuid)`);
       params.push(cur.at.toISOString(), cur.id);
     }
     params.push(limit + 1);
@@ -626,7 +671,7 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
       `SELECT r.*, ${runCountsAgg()}
        FROM api_scan_runs r
        WHERE ${where.join(' AND ')}
-       ORDER BY r.created_at DESC, r.id DESC LIMIT $${limitIdx}`,
+       ORDER BY date_trunc('milliseconds', r.created_at) DESC, r.id DESC LIMIT $${limitIdx}`,
       params
     );
     const items = rows.rows.slice(0, limit).map(toRunDto);
@@ -653,15 +698,22 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
 
   app.get('/scans/:scanId', { preHandler: requirePermission('finding.read') }, async (req) => {
     const { scanId } = req.params as { scanId: string };
+    const { projectId } = req.query as { projectId?: string };
+    // scan_id is only unique per project: consider every match, return one the caller may read, and answer 404 for the
+    // rest so a foreign scan's existence isn't revealed.
     const rows = await deps.pool.query<RunRow>(
-      `SELECT r.*, ${runCountsAgg()} FROM api_scan_runs r WHERE r.scan_id = $1`,
-      [scanId]
+      `SELECT r.*, ${runCountsAgg()} FROM api_scan_runs r
+        WHERE r.scan_id = $1 AND ($2::uuid IS NULL OR r.project_id = $2::uuid)
+        ORDER BY r.created_at DESC LIMIT 20`,
+      [scanId, projectId && isUuid(projectId) ? projectId : null]
     );
-    const r = rows.rows[0];
-    if (!r) throw new ApiError('NOT_FOUND', `scan ${scanId} not found`);
-    const scope = await resolveProjectScope(deps.pool, r.project_id);
-    await assertScope(req, { orgId: scope.orgId, projectId: r.project_id, environmentId: r.environment_id }, 'scan.read', 'finding.read');
-    return ok(toRunDto(r));
+    for (const r of rows.rows) {
+      const scope = await resolveProjectScope(deps.pool, r.project_id);
+      if (can(req.actor!.bindings, { orgId: scope.orgId, projectId: r.project_id, environmentId: r.environment_id }, 'finding.read')) {
+        return ok(toRunDto(r));
+      }
+    }
+    throw new ApiError('NOT_FOUND', `scan ${scanId} not found`);
   });
 
   console.log('[boot] plugin:scanning exit');

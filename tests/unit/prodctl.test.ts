@@ -18,6 +18,12 @@ describe('S7-D2 prod command allow-list', () => {
     }
   });
 
+  it('rejects a target that starts with a dash (single-dash flag)', () => {
+    for (const target of ['-n', '-o', '-f']) {
+      expect(() => resolveCommand({ op: 'health', target })).toThrow(ProdCommandRejectedError);
+    }
+  });
+
   it('rejects unknown ops', () => {
     expect(() => resolveCommand({ op: 'shell' as never, target: 'x' })).toThrow(ProdCommandRejectedError);
   });

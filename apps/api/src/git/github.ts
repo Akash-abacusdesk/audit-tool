@@ -6,7 +6,7 @@
  * ponytail: first page only (per_page=100). Walk Link headers when repos
  * outgrow 100 branches/commits/PRs per snapshot.
  */
-import type { PullRequestState } from '@platform/shared';
+import { withRetry, type PullRequestState } from '@platform/shared';
 
 export interface GitHubBranch {
   name: string;
@@ -115,7 +115,7 @@ async function getJson(
   // upgrade path: per-provider retry policy if flakiness ever shows.
   let res: Response;
   try {
-    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(10_000) });
+    res = await withRetry(fetchImpl)(url, { headers, signal: AbortSignal.timeout(10_000) });
   } catch (err) {
     throw Object.assign(
       new Error(`github ${url.split('?')[0]} unreachable: ${(err as Error)?.name ?? 'error'}`),

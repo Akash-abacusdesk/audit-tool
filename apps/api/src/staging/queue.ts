@@ -9,6 +9,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { PgBoss } from 'pg-boss';
+import type { Queryable } from '../auth/audit.js';
+import { asBossDb } from '../db/pool.js';
 import {
   ApiError,
   assertStagingSafe,
@@ -40,10 +42,10 @@ export interface StagingStoreEntry {
 }
 
 export interface StagingStore {
-  create(projectId: string, environmentId: string, ref: string): Promise<string>;
-  get(id: string): Promise<StagingStoreEntry | null>;
+  create(projectId: string, environmentId: string, ref: string, db?: Queryable): Promise<string>;
+  get(id: string, db?: Queryable): Promise<StagingStoreEntry | null>;
   /** Apply a lifecycle event to a known staging id; throws on unknown id/illegal transition. */
-  apply(id: string, event: StagingEvent): Promise<StagingState>;
+  apply(id: string, event: StagingEvent, db?: Queryable): Promise<StagingState>;
   /** Record which containers/network back this run (D2), so test-run/destroy can find them. */
   setRuntime(id: string, runtime: StagingRuntimeRecord): Promise<void>;
 }
@@ -86,7 +88,7 @@ export class InMemoryStagingStore implements StagingStore {
 
 /** Minimal boss surface the orchestrator needs — PgBoss satisfies this. */
 export interface StagingBoss {
-  send(queue: string, data: unknown): Promise<string | null>;
+  send(queue: string, data: unknown, options?: { db: ReturnType<typeof asBossDb> }): Promise<string | null>;
 }
 
 export class StagingOrchestrator {
@@ -99,13 +101,17 @@ export class StagingOrchestrator {
   async provision(
     projectId: string,
     environmentId: string,
-    ref: string
+    ref: string,
+    db?: Queryable
   ): Promise<{ stagingId: string; jobId: string | null }> {
-    const stagingId = await this.store.create(projectId, environmentId, ref);
-    await this.store.apply(stagingId, 'provision'); // requested -> provisioning
+    // With `db` (a transaction) the row, its state change and the pg-boss job commit together: a crash can no
+    // longer strand a run in `provisioning` with no job.
+    const stagingId = await this.store.create(projectId, environmentId, ref, db);
+    await this.store.apply(stagingId, 'provision', db); // requested -> provisioning
     const jobId = await this.boss.send(
       JOB.stagingProvision,
-      stagingProvisionPayload.parse({ stagingId, projectId, environmentId, ref })
+      stagingProvisionPayload.parse({ stagingId, projectId, environmentId, ref }),
+      db ? { db: asBossDb(db) } : undefined
     );
     return { stagingId, jobId };
   }
@@ -133,13 +139,14 @@ export class StagingOrchestrator {
   }
 
   /** Tear down the staging environment. */
-  async destroy(stagingId: string): Promise<{ jobId: string | null }> {
-    const entry = await this.store.get(stagingId);
+  async destroy(stagingId: string, db?: Queryable): Promise<{ jobId: string | null }> {
+    const entry = await this.store.get(stagingId, db);
     if (!entry) throw new ApiError('NOT_FOUND', `staging ${stagingId} not found`);
-    await this.store.apply(stagingId, 'destroy'); // ready -> destroying
+    await this.store.apply(stagingId, 'destroy', db); // ready -> destroying
     const jobId = await this.boss.send(
       JOB.stagingDestroy,
-      stagingDestroyPayload.parse({ stagingId })
+      stagingDestroyPayload.parse({ stagingId }),
+      db ? { db: asBossDb(db) } : undefined
     );
     return { jobId };
   }

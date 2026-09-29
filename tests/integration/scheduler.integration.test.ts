@@ -169,7 +169,8 @@ describe('S4A scheduler against real PG + pg-boss', () => {
       }[];
     };
     expect(['ok', 'degraded', 'blocked']).toContain(data.verdict);
-    expect(data.classes).toHaveLength(11);
+    expect(data.classes).toHaveLength(12); // 11 original + notifications (S9 outbox)
+    expect(data.classes.some((c) => c.key === 'notifications')).toBe(true);
     const ai = data.classes.find((c) => c.key === 'ai_remediation')!;
     expect(ai.disabled).toBe(true);
     expect(ai.admittingWorkers).toBe(false);

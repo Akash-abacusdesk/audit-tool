@@ -9,6 +9,7 @@ import {
   type UserDto,
 } from '@platform/shared';
 import { recordAudit } from './audit.js';
+import { isLockedDown, LOCKDOWN_BLOCKED_PERMISSIONS } from '../security/lockdown.js';
 
 const SESSION_TTL_MS = Number(process.env.AUTH_SESSION_TTL_HOURS ?? 24) * 3600_000;
 
@@ -153,6 +154,23 @@ export function requirePermission(perm: Permission) {
         details: { permission: perm },
       });
       throw new ApiError('FORBIDDEN', `missing permission: ${perm}`);
+    }
+
+    // S16 emergency lockdown (compromise-response runbook action 5): a
+    // subset of permissions is blocked platform-wide regardless of RBAC,
+    // checked fresh (no cache) so a toggle takes effect on the very next
+    // request. JIT revoke/read/audit permissions are never in this set —
+    // an incident response needs those to still work.
+    if (LOCKDOWN_BLOCKED_PERMISSIONS.has(perm) && (await isLockedDown(req.server.pool))) {
+      await recordAudit(req.server.pool, {
+        actorId: actor.user.id,
+        action: `authz.deny.lockdown.${perm}`,
+        result: 'deny',
+        resource: `${req.method} ${req.url}`,
+        requestId: req.id,
+        details: { permission: perm },
+      });
+      throw new ApiError('FORBIDDEN', 'platform is in emergency lockdown');
     }
   };
 }

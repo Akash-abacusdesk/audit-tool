@@ -10,6 +10,8 @@ export async function startBoss(url: string, onError: (err: Error) => void): Pro
   const boss = new PgBoss({
     connectionString: url,
     schema: 'pgboss',
+    // Every replica runs its own pool: keep it small so the bouncer/Postgres connection budget scales with replicas.
+    max: Number(process.env.PGBOSS_POOL_MAX ?? 5),
     // Capacity-agnostic policy: queue sizing is env-tunable later, defaults are fine for S1.
   });
   boss.on('error', onError);

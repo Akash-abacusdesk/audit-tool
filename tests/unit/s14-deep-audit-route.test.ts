@@ -32,6 +32,7 @@ function makePool(role = 'manager') {
   const runs = new Map<string, { id: string; target: unknown; state: unknown; report: unknown; created_at: Date }>();
   const pool = {
     query: async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FROM api_projects')) return { rows: [{ org_id: ORG, env_ok: true }], rowCount: 1 };
       if (sql.includes('api_sessions')) {
         return { rows: [{ session_id: 's1', id: 'u-mgr', email: 'm@x', display_name: 'M', is_active: true, created_at: new Date() }], rowCount: 1 };
       }
@@ -94,6 +95,28 @@ describe('S14-D3 deep-audit routes', () => {
     expect(body.ok).toBe(true);
     expect(body.data.stages).toBe(7);
     expect(auditCalls.some((c) => String(c[1]).includes('audit.deep'))).toBe(true);
+  });
+
+  it('POST /run confines workspaceDir to DEEP_AUDIT_WORKSPACE_ROOT and targetUrl to DEEP_AUDIT_ALLOWED_HOSTS (422)', async () => {
+    const { app } = await buildApp();
+    const run = (extra: object) =>
+      app.inject({ method: 'POST', url: '/api/v1/deep-audit/run', headers, payload: JSON.stringify({ ...stagingBody, ...extra }) });
+    delete process.env.DEEP_AUDIT_WORKSPACE_ROOT;
+    delete process.env.DEEP_AUDIT_ALLOWED_HOSTS;
+    expect((await run({ workspaceDir: '/srv/ws/a' })).statusCode).toBe(422); // no root configured: fail closed
+    expect((await run({ targetUrl: 'https://staging.example.com' })).statusCode).toBe(422);
+    process.env.DEEP_AUDIT_WORKSPACE_ROOT = '/srv/ws';
+    process.env.DEEP_AUDIT_ALLOWED_HOSTS = 'staging.example.com';
+    try {
+      expect((await run({ workspaceDir: '/srv/ws/a' })).statusCode).toBe(202);
+      expect((await run({ workspaceDir: '/srv/ws/../etc' })).statusCode).toBe(422);
+      expect((await run({ workspaceDir: '/etc' })).statusCode).toBe(422);
+      expect((await run({ targetUrl: 'https://staging.example.com/x' })).statusCode).toBe(202);
+      expect((await run({ targetUrl: 'https://169.254.169.254/' })).statusCode).toBe(422);
+    } finally {
+      delete process.env.DEEP_AUDIT_WORKSPACE_ROOT;
+      delete process.env.DEEP_AUDIT_ALLOWED_HOSTS;
+    }
   });
 
   it('POST /run refuses a production target with 422', async () => {

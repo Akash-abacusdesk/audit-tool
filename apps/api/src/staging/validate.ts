@@ -11,12 +11,20 @@
  *   pass/fail-on-any-pixel-change is the ceiling here; a perceptual/masked
  *   diff is the upgrade once a real design calls for tolerance).
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { chmod, readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { execDocker } from '@platform/worker-runtime';
 import type { StagingRuntime } from './provisioner.js';
 
-const CHROME_IMAGE = process.env.STAGING_CHROME_IMAGE ?? 'zenika/alpine-chrome:latest';
+/**
+ * --no-sandbox is needed in a container without a seccomp profile for Chrome's user-namespace sandbox, so the
+ * container itself is the boundary: no capabilities, no privilege escalation, read-only root, bounded resources.
+ */
+const CHROME_HARDEN = [
+  '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only',
+  '--tmpfs', '/tmp', '--tmpfs', '/home/chrome', '--memory', '1g', '--pids-limit', '512',
+];
+const CHROME_IMAGE = process.env.STAGING_CHROME_IMAGE ?? 'zenika/alpine-chrome:latest@sha256:eb3378c1ed0079f94db054a5fe1aaa790a254ec0d6bbc67eda052420d86a179d';
 const FATAL_MARKERS = ['Fatal error', 'Error establishing a database connection', 'Uncaught Error'];
 
 export interface ValidationResult {
@@ -43,15 +51,18 @@ async function runHeadlessChrome(runtime: StagingRuntime, outDir: string): Promi
 
   const domResult = await execDocker([
     'run', '--rm', '--network', runtime.networkName,
-    '--label', 'com.platform.staging=true',
+    '--label', 'com.platform.staging=true', ...CHROME_HARDEN,
     CHROME_IMAGE,
     '--disable-gpu', '--no-sandbox', '--dump-dom', url,
   ]);
   await writeFile(domFile, domResult.stdout).catch(() => {});
 
+  // Chrome runs as uid 1000 in the container; on a Linux host mkdtemp's 0700 dir would be unwritable to it
+  // (Docker Desktop bind mounts hide this). The dir is a short-lived per-run temp dir.
+  await chmod(outDir, 0o777).catch(() => {});
   const shotResult = await execDocker([
     'run', '--rm', '--network', runtime.networkName,
-    '--label', 'com.platform.staging=true',
+    '--label', 'com.platform.staging=true', ...CHROME_HARDEN,
     '-v', `${outDir}:/out`,
     CHROME_IMAGE,
     '--disable-gpu', '--no-sandbox', '--window-size=1280,800', '--screenshot=/out/shot.png', url,

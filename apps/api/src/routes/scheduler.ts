@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { ApiError, ok } from '@platform/shared';
 import { recordAudit } from '../auth/audit.js';
+import { withTx } from '../db/pool.js';
 import { requirePermission } from '../auth/service.js';
 import { demoJobPayload } from '../scheduler/classes.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
@@ -58,14 +59,18 @@ export async function schedulerRoutes(app: FastifyInstance, deps: Deps): Promise
       if (!deps.scheduler.hasClass(classKey)) {
         throw new ApiError('NOT_FOUND', `unknown workload class: ${classKey}`);
       }
-      const jobId = await deps.scheduler.enqueue(classKey, payload);
-      await recordAudit(deps.pool, {
-        actorId: req.actor!.user.id,
-        action: 'scheduler.enqueue',
-        result: 'allow',
-        resource: `job:${jobId ?? 'null'}`,
-        requestId: req.id,
-        details: { classKey },
+      // The job and its audit event commit together: no job runs without a record of who queued it.
+      const jobId = await withTx(deps.pool, async (tx) => {
+        const id = await deps.scheduler.enqueue(classKey, payload, tx);
+        await recordAudit(tx, {
+          actorId: req.actor!.user.id,
+          action: 'scheduler.enqueue',
+          result: 'allow',
+          resource: `job:${id ?? 'null'}`,
+          requestId: req.id,
+          details: { classKey },
+        });
+        return id;
       });
       return reply.status(201).send(ok({ jobId }));
     }

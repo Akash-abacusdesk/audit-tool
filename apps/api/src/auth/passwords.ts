@@ -34,3 +34,10 @@ export async function verifyPassword(password: string, stored: string): Promise<
   });
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
+
+let dummyHash: Promise<string> | undefined;
+/** Burn one scrypt so unknown/inactive accounts take as long as a real check (no account-existence timing oracle). */
+export async function burnPasswordCheck(password: string): Promise<void> {
+  dummyHash ??= hashPassword('timing-equalizer');
+  await verifyPassword(password, await dummyHash);
+}

@@ -36,6 +36,10 @@ const BASE_CLASSES: readonly WorkloadClass[] = [
   // Section-20 feature: registered now (queue exists, contract frozen) but
   // never consumes until explicitly enabled.
   { key: 'ai_remediation', queue: 'wl.ai_remediation', priority: 20, localConcurrency: 1, heavy: true, disabled: true, retryLimit: 2, retryDelaySeconds: 30, expireSeconds: 3600 },
+  // S9: outbound Telegram alerts. Light/fast, retries a few times in case the
+  // Bot API is briefly down; not disabled by default since TelegramClient
+  // already no-ops safely (UNAVAILABLE) when no bot token is configured.
+  { key: 'notifications', queue: 'wl.notifications', priority: 35, localConcurrency: 4, heavy: false, disabled: false, retryLimit: 4, retryDelaySeconds: 15, expireSeconds: 300 },
 ];
 
 function envNum(name: string): number | undefined {
@@ -125,8 +129,21 @@ export const aiRemediationJobPayload = z.object({
 
 export type AiRemediationJobPayload = z.infer<typeof aiRemediationJobPayload>;
 
+/**
+ * Notification-shaped job (S9): the row already exists in notification_outbox
+ * (status='pending') before this is enqueued — the job just sends it and
+ * flips the status. Re-fetching by id (not carrying the body in the payload)
+ * keeps the job envelope small and the outbox row the single source of truth.
+ */
+export const notificationJobPayload = z.object({
+  kind: z.literal('notification'),
+  outboxId: z.string().uuid(),
+});
+
+export type NotificationJobPayload = z.infer<typeof notificationJobPayload>;
+
 /** Payload union as consumed by handleJobs (routed on the `kind` field). */
-export type SchedulerJobPayload = ScanJobPayload | AiRemediationJobPayload | DemoJobPayload;
+export type SchedulerJobPayload = ScanJobPayload | AiRemediationJobPayload | NotificationJobPayload | DemoJobPayload;
 
 /** Pure spec composer — unit-testable without touching the runtime/docker. */
 export function buildWorkerSpec(

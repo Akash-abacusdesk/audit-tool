@@ -148,12 +148,14 @@ async function keysetPage<T extends { id: string }>(
   const q = qualifier;
   const clauses = [
     ...whereAnd,
-    `($${curAtIdx}::timestamptz IS NULL OR (${q}created_at, ${q}id) < ($${curAtIdx}::timestamptz, $${curIdIdx}::uuid))`,
+    // Compare/order on the millisecond-truncated timestamp: the cursor round-trips through a JS Date (ms), and rows
+    // written in one transaction share a created_at, so a raw microsecond compare would skip them across pages.
+    `($${curAtIdx}::timestamptz IS NULL OR (date_trunc('milliseconds', ${q}created_at), ${q}id) < ($${curAtIdx}::timestamptz, $${curIdIdx}::uuid))`,
   ];
   const rows = await pool.query<T & { created_at: Date }>(
     `${selectFrom}
      WHERE ${clauses.join(' AND ')}
-     ORDER BY ${q}created_at DESC, ${q}id DESC LIMIT $${limitIdx}`,
+     ORDER BY date_trunc('milliseconds', ${q}created_at) DESC, ${q}id DESC LIMIT $${limitIdx}`,
     [...params, cursor ? cursor.at.toISOString() : null, cursor?.id ?? null, limit + 1]
   );
   const items = rows.rows.slice(0, limit);
@@ -308,6 +310,9 @@ export async function gitRoutes(app: FastifyInstance, deps: Deps): Promise<void>
       const orgId = proj.rows[0]?.org_id;
       if (!orgId) throw new ApiError('NOT_FOUND', `project ${projectId} not found`);
       await assertScope(req, { orgId, projectId }, 'git.repo.link', 'project.manage');
+      // The connection's stored token is used on sync: it must belong to the same org as the project.
+      const conn = await deps.pool.query<{ org_id: string }>('SELECT org_id::text FROM api_git_connections WHERE id = $1', [connectionId]);
+      if (conn.rows[0]?.org_id !== orgId) throw new ApiError('NOT_FOUND', 'connection or project does not exist');
       try {
         const inserted = await deps.pool.query<RepoLinkRow>(
           `INSERT INTO api_repo_links (org_id, project_id, connection_id, external_repo_id, full_name, default_branch)

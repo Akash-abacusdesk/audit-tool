@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { PgBoss } from 'pg-boss';
@@ -15,6 +14,8 @@ import {
 } from '@platform/shared';
 import { recordAudit } from '../auth/audit.js';
 import { withTx } from '../db/pool.js';
+import { createLimiter } from '../util/rate-limit.js';
+import { hdr, verifySha256Signature } from '../util/http.js';
 
 interface Deps {
   pool: Pool;
@@ -26,30 +27,14 @@ interface RawBodyRequest extends FastifyRequest {
   rawBody?: Buffer;
 }
 
-/** First header value as string | undefined (headers may be string[] per node types). */
-function hdr(req: FastifyRequest, name: string): string | undefined {
-  const v = req.headers[name];
-  return Array.isArray(v) ? v[0] : v;
-}
-
 // ---- Env knobs (capacity-agnostic, see infrastructure/.env.example) ----
 
 const MAX_AGE_MS =
   Number(process.env.WEBHOOK_MAX_AGE_MIN ?? 10) * 60_000;
 const BODY_LIMIT = Number(process.env.WEBHOOK_BODY_LIMIT_BYTES ?? 10_485_760);
 
-// ponytail: in-memory limiter is per-process; move to a shared store if the API ever scales out.
-const hits = new Map<string, number[]>();
-const RATE_MAX = Number(process.env.WEBHOOK_RATE_MAX ?? 30);
-const RATE_WINDOW_MS = Number(process.env.WEBHOOK_RATE_WINDOW_MIN ?? 1) * 60_000;
-
-function rateLimited(key: string): boolean {
-  const now = Date.now();
-  const recent = (hits.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
-  recent.push(now);
-  hits.set(key, recent);
-  return recent.length > RATE_MAX;
-}
+const limiter = createLimiter(Number(process.env.WEBHOOK_RATE_MAX ?? 30), Number(process.env.WEBHOOK_RATE_WINDOW_MIN ?? 1) * 60_000);
+const rateLimited = limiter.hit;
 
 /** Registered provider slugs — day-one ruling: github only (god, S3-D2 GO). */
 const REGISTERED: readonly GitProvider[] = (
@@ -155,10 +140,7 @@ export async function webhookRoutes(app: FastifyInstance, deps: Deps): Promise<v
       });
       throw new ApiError('UNAUTHORIZED', 'invalid signature');
     }
-    const mac = createHmac('sha256', secret).update(rawReq.rawBody!).digest();
-    const hex = /^sha256=([0-9a-fA-F]{64})$/.exec(receivedSig)?.[1];
-    const given = typeof hex === 'string' ? Buffer.from(hex, 'hex') : Buffer.alloc(0);
-    if (given.length !== mac.length || !timingSafeEqual(given, mac)) {
+    if (!verifySha256Signature(secret, rawReq.rawBody!, receivedSig)) {
       await recordAudit(deps.pool, {
         actorId: null,
         action: 'webhook.sig.deny',

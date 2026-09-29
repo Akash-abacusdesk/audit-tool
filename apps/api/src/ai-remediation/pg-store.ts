@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import type { Queryable } from '../auth/audit.js';
 import type { AiRemediationResult } from '@platform/shared';
 import type { RemediationRequestEntry, RemediationRequestStatus, RemediationStore } from './store.js';
 
@@ -40,8 +41,8 @@ function toEntry(r: Row): RemediationRequestEntry {
 export class PgRemediationStore implements RemediationStore {
   constructor(private readonly pool: Pool) {}
 
-  async create(findingId: string, projectId: string, environmentId: string | null, requestedBy: string): Promise<string> {
-    const res = await this.pool.query<{ id: string }>(
+  async create(findingId: string, projectId: string, environmentId: string | null, requestedBy: string, db: Queryable = this.pool): Promise<string> {
+    const res = await (db as Pool).query<{ id: string }>(
       `INSERT INTO api_ai_remediation_requests (finding_id, project_id, environment_id, requested_by)
        VALUES ($1, $2, $3, $4) RETURNING id`,
       [findingId, projectId, environmentId, requestedBy]

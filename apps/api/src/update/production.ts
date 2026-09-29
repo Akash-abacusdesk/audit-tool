@@ -14,14 +14,14 @@ import path from 'node:path';
 import { execDocker, createNetwork } from '@platform/worker-runtime';
 import { DB_PASSWORD, freePort, waitForMysql, waitForHttp } from '../staging/provisioner.js';
 
-const WP_IMAGE = process.env.STAGING_WP_IMAGE ?? 'wordpress:6.6-apache';
-const DB_IMAGE = process.env.STAGING_DB_IMAGE ?? 'mysql:8';
-const CLI_IMAGE = process.env.UPDATE_WPCLI_IMAGE ?? 'wordpress:cli';
+const WP_IMAGE = process.env.STAGING_WP_IMAGE ?? 'wordpress:6.6-apache@sha256:c30c1376b4d2c9d1e2328c2ee6149d133104d65873a98cbc6adc743a2964c4ba';
+const DB_IMAGE = process.env.STAGING_DB_IMAGE ?? 'mysql:8@sha256:0744ee5ef89ce6ccfa13de3e579fe6b9e27f93dd70da9c06d2c908b1b193fb8d';
+const CLI_IMAGE = process.env.UPDATE_WPCLI_IMAGE ?? 'wordpress:cli@sha256:0f7f0f895c379bb7b60b8f09562811084ac0424d544747f76d95cc785feccac0';
 // The wordpress:apache image's wp-content is owned by uid 33 (www-data on its
 // debian base); wordpress:cli's own www-data is a different uid (alpine base),
 // so wp-cli must run as 33 explicitly or it can't write to a --volumes-from mount.
 const WP_CONTENT_UID = '33:33';
-const TAR_IMAGE = process.env.UPDATE_TAR_IMAGE ?? 'alpine:latest';
+const TAR_IMAGE = process.env.UPDATE_TAR_IMAGE ?? 'alpine:latest@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6';
 const SNAPSHOT_DIR = process.env.UPDATE_SNAPSHOT_DIR ?? path.join(process.cwd(), 'data', 'update-snapshots');
 
 export interface ProductionRuntime {
@@ -160,8 +160,15 @@ export interface PromoteResult {
   detail: string;
 }
 
+/** Allow-lists for values that reach wp-cli argv: a flag (e.g. --exec=<php>) must never get through. */
+export const COMPONENT_RE = /^(core|[a-z0-9][a-z0-9_-]{0,63})$/;
+export const VERSION_RE = /^\d+(\.\d+){0,3}([-.][A-Za-z0-9]+)?$/;
+
 /** Real promotion: runs an actual wp-cli update command against the persistent WP container. */
 export async function promoteUpdate(environmentId: string, component: string, toVersion: string): Promise<PromoteResult> {
+  if (!COMPONENT_RE.test(component) || !VERSION_RE.test(toVersion)) {
+    return { ok: false, detail: 'refused: component/version failed validation' };
+  }
   const runtime = await ensureProductionContainers(environmentId);
   // wordpress:cli's entrypoint only auto-prepends `wp` after probing `wp help <arg>`,
   // which itself fails (and so skips the prepend) on a site that isn't fully

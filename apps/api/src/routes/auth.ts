@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import {
@@ -11,10 +12,11 @@ import {
   type SessionDto,
   type UserDto,
 } from '@platform/shared';
-import { hashPassword, verifyPassword } from '../auth/passwords.js';
+import { burnPasswordCheck, hashPassword, verifyPassword } from '../auth/passwords.js';
 import { recordAudit } from '../auth/audit.js';
 import { bearerOf, createSession, requireAuth, revokeSessionByToken } from '../auth/service.js';
 import { withTx } from '../db/pool.js';
+import { createLimiter } from '../util/rate-limit.js';
 
 interface Deps {
   pool: Pool;
@@ -59,6 +61,11 @@ export function toBindingDto(r: {
 const BINDING_SELECT = `SELECT id::text, user_id::text, role, org_id::text, project_id::text,
         environment_id::text, created_at FROM api_role_bindings`;
 
+const loginLimiter = createLimiter(
+  Number(process.env.LOGIN_MAX_FAILURES ?? 10),
+  Number(process.env.LOGIN_WINDOW_MIN ?? 15) * 60_000
+);
+
 export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   console.log('[boot] plugin:auth enter');
   /**
@@ -73,12 +80,21 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     }
     const { email, password, displayName, orgName, orgSlug } = parsed.data;
 
-    const count = await deps.pool.query<{ n: string }>('SELECT count(*)::text AS n FROM api_users');
-    if (count.rows[0]!.n !== '0') {
-      throw new ApiError('CONFLICT', 'bootstrap already done — users exist');
+    // Optional shared secret: when set, only the operator who knows it can claim the first account.
+    const expected = process.env.BOOTSTRAP_TOKEN;
+    if (expected) {
+      const given = Buffer.from(String(req.headers['x-bootstrap-token'] ?? ''));
+      const want = Buffer.from(expected);
+      if (given.length !== want.length || !timingSafeEqual(given, want)) throw new ApiError('FORBIDDEN', 'bootstrap token required');
     }
 
     const session = await withTx(deps.pool, async (tx) => {
+      // Serialize concurrent bootstraps and re-check inside the lock: two racing callers must not both win.
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext('api.bootstrap'))");
+      const count = await tx.query<{ n: string }>('SELECT count(*)::text AS n FROM api_users');
+      if (count.rows[0]!.n !== '0') {
+        throw new ApiError('CONFLICT', 'bootstrap already done — users exist');
+      }
       const passwordHash = await hashPassword(password);
       const user = await tx.query<{ id: string }>(
         `INSERT INTO api_users (email, display_name, password_hash) VALUES ($1, $2, $3)
@@ -112,6 +128,12 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     }
     const email = parsed.data.email.toLowerCase();
 
+    // Failed-login throttle per account and per source address; blocks before any scrypt work.
+    const keys = [`email:${email}`, `ip:${req.ip}`];
+    if (keys.some((k) => loginLimiter.blocked(k))) {
+      throw new ApiError('RATE_LIMITED', 'too many failed logins; try later');
+    }
+
     const found = await deps.pool.query<{
       id: string;
       display_name: string;
@@ -124,9 +146,11 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     );
     const row = found.rows[0];
     // Same generic answer for unknown email, wrong password, inactive account.
-    const valid =
-      row && row.is_active && (await verifyPassword(parsed.data.password, row.password_hash));
+    let valid = false;
+    if (row && row.is_active) valid = await verifyPassword(parsed.data.password, row.password_hash);
+    else await burnPasswordCheck(parsed.data.password);
     if (!valid || !row) {
+      for (const k of keys) loginLimiter.record(k);
       await recordAudit(deps.pool, {
         actorId: row?.id ?? null,
         action: 'auth.login',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ROLES,
+  assignableRolesFor,
   can,
   permissionsFor,
   permissionsOfRole,
@@ -82,6 +83,24 @@ describe('rbac resolver (default deny)', () => {
     const bindings = [b({ role: 'team_lead', projectId: 'p1' })];
     expect(can(bindings, { orgId: ORG }, 'git.manage')).toBe(false);
     expect(can(bindings, { orgId: ORG, projectId: 'p1' }, 'git.manage')).toBe(true);
+  });
+
+  it('role.assign has a privilege ceiling: team_lead cannot grant manager/security_admin', () => {
+    const bindings = [b({ role: 'team_lead', projectId: 'p1' })];
+    const assignable = assignableRolesFor(bindings, { orgId: ORG, projectId: 'p1' });
+    expect(assignable.has('developer')).toBe(true);
+    expect(assignable.has('project_coordinator')).toBe(true);
+    expect(assignable.has('manager')).toBe(false);
+    expect(assignable.has('security_admin')).toBe(false);
+    expect(assignable.has('team_lead')).toBe(false);
+    // no coverage at this scope -> nothing assignable
+    expect(assignableRolesFor(bindings, { orgId: ORG, projectId: 'p2' }).size).toBe(0);
+  });
+
+  it('security_admin may grant any role', () => {
+    const bindings = [b({ role: 'security_admin' })];
+    const assignable = assignableRolesFor(bindings, { orgId: ORG });
+    for (const role of ROLES) expect(assignable.has(role)).toBe(true);
   });
 });
 

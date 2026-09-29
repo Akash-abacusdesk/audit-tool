@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { ApiError, ok } from '@platform/shared';
+import { lifecycle } from '../util/lifecycle.js';
 
 interface HealthDeps {
   pool: Pool;
@@ -12,6 +13,9 @@ export async function healthRoutes(app: FastifyInstance, deps: HealthDeps): Prom
   app.get('/healthz', async () => ok({ status: 'live' }));
 
   app.get('/readyz', async () => {
+    if (lifecycle.draining) {
+      throw new ApiError('UNAVAILABLE', 'shutting down');
+    }
     if (!deps.bossStarted) {
       throw new ApiError('UNAVAILABLE', 'pg-boss not started');
     }

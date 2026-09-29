@@ -174,13 +174,17 @@ export async function handleWebhookReceived(
     'SELECT id::text FROM api_repo_links WHERE connection_id = $1 AND full_name = $2',
     [e.connection_id, e.full_name]
   );
+  let failed = 0;
   for (const l of links.rows) {
     try {
       await syncRepoLink(pool, l.id);
     } catch (err) {
+      failed++;
       log?.error({ err, eventId, repoLinkId: l.id }, 'webhook-triggered sync failed');
     }
   }
+  // A failed sync must not be recorded as processed: throw so pg-boss retries the delivery.
+  if (failed > 0) throw new Error(`webhook ${eventId}: ${failed}/${links.rows.length} repo link sync(s) failed`);
   await markProcessed(pool, eventId);
 }
 

@@ -8,13 +8,16 @@ import { buildApp } from './server.js';
 import { handleWebhookReceived } from './git/sync.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { startOrphanSweeper } from '@platform/worker-runtime';
-import { deepAuditStore } from './routes/deep-audit.js';
+import { PgDeepAuditStore } from './deep-audit/pg-store.js';
 import { DeepAuditQueue } from './deep-audit/queue.js';
 import { PgRemediationStore } from './ai-remediation/pg-store.js';
 import { PgStagingStore } from './staging/pg-store.js';
 import { StagingWorker } from './staging/worker.js';
 import { PgUpdateStore } from './update/pg-store.js';
 import { UpdateWorker } from './update/worker.js';
+import { telegramClient } from './routes/telegram.js';
+import { startReconciler } from './jobs/reconcile.js';
+import { lifecycle } from './util/lifecycle.js';
 
 /**
  * Boot path: config → pool → migrations → pg-boss (+ workers) → HTTP → graceful shutdown.
@@ -42,97 +45,71 @@ async function main(): Promise<void> {
   const boss = await startBoss(cfg.pgbossUrl, (err) => console.error('pg-boss error:', err));
   bootAt('pg-boss started');
 
-  // Reference worker — proves queue round-trip; real workers land in later sections.
   // pg-boss v12 queues are declarative: without createQueue every poll errors
   // "Queue does not exist" (968KB of stderr in 37min observed live).
-  try {
-    await boss.inner.createQueue(JOB.exampleCreated);
-  } catch {
-    // already exists
-  }
-  await boss.inner.work(JOB.exampleCreated, async (jobs) => {
-    for (const job of jobs) {
-      console.log(`[worker] ${job.name} received: ${JSON.stringify(job.data)}`);
+  const register = async (
+    queue: string,
+    handle: (data: unknown) => Promise<void>,
+    opts: { expireInSeconds?: number; retryLimit?: number } = {}
+  ): Promise<void> => {
+    try {
+      await boss.inner.createQueue(queue, { retryBackoff: true, ...opts });
+    } catch {
+      // already exists
     }
+    await boss.inner.work(queue, async (jobs) => {
+      for (const job of jobs) await handle(job.data);
+    });
+  };
+
+  // Reference worker — proves queue round-trip; real workers land in later sections.
+  await register(JOB.exampleCreated, async (data) => {
+    console.log(`[worker] ${JOB.exampleCreated} received: ${JSON.stringify(data)}`);
   });
 
   // S3-D1B consumer for pam's webhook ingress envelope (payload { eventId }):
   // re-syncs branches/commits/PRs of every repo link matching the delivery's
   // repository. Safe to run before her producer lands — queue just stays empty.
-  try {
-    await boss.inner.createQueue(JOB.webhookReceived);
-  } catch {
-    // already exists
-  }
-  await boss.inner.work(JOB.webhookReceived, async (jobs) => {
-    for (const job of jobs) {
-      const parsed = webhookReceivedPayload.safeParse(job.data);
-      if (!parsed.success) {
-        console.error('[worker] git.webhook.received: bad payload', JSON.stringify(job.data));
-        continue;
-      }
-      await handleWebhookReceived(pool, parsed.data.eventId, {
-        error: (o, m) => console.error('[worker] git.webhook.received:', m, JSON.stringify(o)),
-      });
+  await register(JOB.webhookReceived, async (data) => {
+    const parsed = webhookReceivedPayload.safeParse(data);
+    if (!parsed.success) {
+      console.error('[worker] git.webhook.received: bad payload', JSON.stringify(data));
+      return;
     }
+    await handleWebhookReceived(pool, parsed.data.eventId, {
+      error: (o, m) => console.error('[worker] git.webhook.received:', m, JSON.stringify(o)),
+    });
   });
+
   // S14-D3: deep-audit pipeline — one stage per job, self-chaining (queue.ts).
-  try {
-    await boss.inner.createQueue('deep-audit.stage');
-  } catch {
-    // already exists
-  }
-  const deepAuditQueue = new DeepAuditQueue(boss.inner, deepAuditStore);
-  await boss.inner.work('deep-audit.stage', async (jobs) => {
-    for (const job of jobs) {
-      const data = job.data as { auditId: string; stage: DeepAuditStage; target: DeepAuditTarget };
+  // Stages run real scanners (up to an hour): the 15-minute default expiry would redeliver a live job.
+  const deepAuditQueue = new DeepAuditQueue(boss.inner, new PgDeepAuditStore(pool));
+  await register(
+    'deep-audit.stage',
+    async (raw) => {
+      const data = raw as { auditId: string; stage: DeepAuditStage; target: DeepAuditTarget };
       try {
         await deepAuditQueue.handleStageJob(data);
       } catch (err) {
         console.error('[worker] deep-audit.stage:', data.stage, err instanceof Error ? err.message : err);
+        throw err; // let pg-boss retry (handleStageJob is redelivery-safe)
       }
-    }
-  });
+    },
+    { expireInSeconds: 3900, retryLimit: 2 }
+  );
+
   // S11-D2: staging provisioner — real ephemeral WP+MySQL containers.
-  const stagingStoreForWorker = new PgStagingStore(pool);
-  const stagingWorker = new StagingWorker(boss.inner, stagingStoreForWorker);
-  for (const q of [JOB.stagingProvision, JOB.stagingTestRun, JOB.stagingDestroy]) {
-    try {
-      await boss.inner.createQueue(q);
-    } catch {
-      // already exists
-    }
-  }
-  await boss.inner.work(JOB.stagingProvision, async (jobs) => {
-    for (const job of jobs) await stagingWorker.handleProvision(job.data as never);
-  });
-  await boss.inner.work(JOB.stagingTestRun, async (jobs) => {
-    for (const job of jobs) await stagingWorker.handleTestRun(job.data as never);
-  });
-  await boss.inner.work(JOB.stagingDestroy, async (jobs) => {
-    for (const job of jobs) await stagingWorker.handleDestroy(job.data as never);
-  });
+  const stagingWorker = new StagingWorker(boss.inner, new PgStagingStore(pool));
+  await register(JOB.stagingProvision, (d) => stagingWorker.handleProvision(d as never), { expireInSeconds: 1800 });
+  await register(JOB.stagingTestRun, (d) => stagingWorker.handleTestRun(d as never), { expireInSeconds: 1800 });
+  await register(JOB.stagingDestroy, (d) => stagingWorker.handleDestroy(d as never));
 
   // S13-D2: update-unit workers — `stage` reuses the same real staging
   // provisioner; `snapshot`/`promote` need a production WP host (Phase 3).
-  const updateStoreForWorker = new PgUpdateStore(pool);
-  const updateWorker = new UpdateWorker(boss.inner, updateStoreForWorker);
-  for (const q of [JOB.updateSnapshot, JOB.updateStage, JOB.updatePromote]) {
-    try {
-      await boss.inner.createQueue(q);
-    } catch {
-      // already exists
-    }
-  }
-  await boss.inner.work(JOB.updateSnapshot, async (jobs) => {
-    for (const job of jobs) await updateWorker.handleSnapshot(job.data as never);
-  });
-  await boss.inner.work(JOB.updateStage, async (jobs) => {
-    for (const job of jobs) await updateWorker.handleStage(job.data as never);
-  });
-  await boss.inner.work(JOB.updatePromote, async (jobs) => {
-    for (const job of jobs) await updateWorker.handlePromote(job.data as never);
-  });
+  const updateWorker = new UpdateWorker(boss.inner, new PgUpdateStore(pool));
+  await register(JOB.updateSnapshot, (d) => updateWorker.handleSnapshot(d as never), { expireInSeconds: 1800 });
+  await register(JOB.updateStage, (d) => updateWorker.handleStage(d as never), { expireInSeconds: 1800 });
+  await register(JOB.updatePromote, (d) => updateWorker.handlePromote(d as never), { expireInSeconds: 1800 });
   bootAt('worker registered');
 
   // S3-D2: daily pg-boss job pruning api_webhook_events at WEBHOOK_RETENTION_DAYS.
@@ -156,9 +133,10 @@ async function main(): Promise<void> {
   const remediationStore = new PgRemediationStore(pool);
 
   // S4A: workload-class queues, admission control, scheduler workers.
-  const scheduler = new Scheduler({ boss: boss.inner, pool, aiProvider, remediationStore });
+  const scheduler = new Scheduler({ boss: boss.inner, pool, aiProvider, remediationStore, telegramClient });
   await scheduler.start();
   bootAt('scheduler started');
+  await startReconciler(boss.inner, pool, scheduler);
   bootAt('pre-buildApp');
   // S4-B: reap leaked worker containers from crashed runs (idempotent, env-tuned).
   const sweeper = startOrphanSweeper();
@@ -173,10 +151,18 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (closing) return;
     closing = true;
-    await app.close();
+    // Fail /readyz first so the load balancer stops sending traffic, then wind down under a hard deadline.
+    lifecycle.draining = true;
+    const deadline = setTimeout(() => {
+      console.error('shutdown deadline exceeded; forcing exit');
+      process.exit(1);
+    }, Number(process.env.SHUTDOWN_DEADLINE_MS ?? 30_000));
+    deadline.unref();
+    await new Promise((r) => setTimeout(r, Number(process.env.SHUTDOWN_DRAIN_MS ?? 3_000)));
     sweeper.stop();
     scheduler.stop();
-    await boss.stop();
+    await app.close();
+    await boss.stop(); // pg-boss waits for in-flight jobs (graceful, its own timeout)
     await pool.end();
     process.exit(0);
   };

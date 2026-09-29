@@ -10,7 +10,15 @@ export function createPool(databaseUrl: string): Pool {
     connectionString: databaseUrl,
     max: Number(process.env.PG_POOL_MAX ?? 10),
     connectionTimeoutMillis: Number(process.env.PG_POOL_TIMEOUT_MS ?? 5000),
+    // Client-side (a server-side statement_timeout startup parameter is rejected by PgBouncer): a hung query
+    // must not pin a pooled connection forever.
+    query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS ?? 60_000),
   });
+}
+
+/** Adapt a pg client/pool to pg-boss's `db` option, so `boss.send(..., { db })` joins the caller's transaction. */
+export function asBossDb(db: Pick<Pool, 'query'>): { executeSql(text: string, values?: unknown[]): Promise<{ rows: any[] }> } {
+  return { executeSql: async (text, values) => ({ rows: (await db.query(text, values)).rows }) };
 }
 
 /** Run `fn` inside one connection + transaction; rollback on throw. */

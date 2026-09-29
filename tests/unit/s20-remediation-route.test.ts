@@ -13,6 +13,7 @@ function makePool(role = 'manager') {
   const auditCalls: unknown[][] = [];
   const pool = {
     query: async (sql: string, params?: unknown[]) => {
+      if (sql.includes('FROM api_projects')) return { rows: [{ org_id: ORG, env_ok: true }], rowCount: 1 };
       if (sql.includes('api_sessions')) {
         return { rows: [{ session_id: 's1', id: 'u-mgr', email: 'm@x', display_name: 'M', is_active: true, created_at: new Date() }], rowCount: 1 };
       }
@@ -26,6 +27,8 @@ function makePool(role = 'manager') {
       return { rows: [], rowCount: 0 };
     },
   } as unknown as Pool;
+  // the route now runs create + enqueue + audit in one transaction (withTx -> pool.connect)
+  (pool as unknown as { connect: unknown }).connect = async () => ({ query: pool.query.bind(pool), release: () => {} });
   return { pool, auditCalls };
 }
 
@@ -54,7 +57,7 @@ describe('S20-D1 remediation routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/v1/findings/${FINDING}/remediate`, headers, payload: JSON.stringify(body) });
     expect(res.statusCode).toBe(202);
     expect(res.json().data.queued).toBe(true);
-    expect(enqueue).toHaveBeenCalledWith('ai_remediation', expect.objectContaining({ kind: 'ai_remediation', findingId: FINDING }));
+    expect(enqueue).toHaveBeenCalledWith('ai_remediation', expect.objectContaining({ kind: 'ai_remediation', findingId: FINDING }), expect.anything());
     expect(auditCalls.some((c) => String(c[1]).includes('remediation.request'))).toBe(true);
   });
 

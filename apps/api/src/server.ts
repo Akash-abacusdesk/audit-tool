@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { PgBoss } from 'pg-boss';
 import { ApiError, fail, toApiError } from '@platform/shared';
+import { createLimiter } from './util/rate-limit.js';
 import { healthRoutes } from './routes/health.js';
 import { exampleRoutes } from './routes/examples.js';
 import { authRoutes } from './routes/auth.js';
@@ -45,9 +46,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       base: { svc: 'api' },
       timestamp: () => `,"ts":"${new Date().toISOString()}"`,
     },
+    // Behind a reverse proxy set TRUST_PROXY to its address/CIDR list (comma-separated) so req.ip is the real client.
+    trustProxy: process.env.TRUST_PROXY ? process.env.TRUST_PROXY.split(',').map((x) => x.trim()) : false,
     genReqId: (req) => {
       const h = req.headers['x-request-id'];
-      return typeof h === 'string' && h.length > 0 ? h : randomUUID();
+      // Client-supplied ids land in logs and audit rows: accept only a short, plain token.
+      return typeof h === 'string' && /^[\w.:-]{1,64}$/.test(h) ? h : randomUUID();
     },
   });
 
@@ -63,9 +67,20 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     app.log.error({ err }, 'pg pool idle client error - connection lost, pg will recover');
   });
 
+  // Coarse per-client ceiling on top of the specific limiters (login, step-up, webhooks): blunts scripted abuse and
+  // runaway clients. Health probes are exempt. ponytail: per-process; move to a shared store with >1 replica.
+  const globalLimiter = createLimiter(Number(process.env.GLOBAL_RATE_MAX ?? 3000), 60_000);
+  app.addHook('onRequest', async (req) => {
+    if (req.url === '/healthz' || req.url === '/readyz') return;
+    if (globalLimiter.hit(req.ip)) throw new ApiError('RATE_LIMITED', 'too many requests');
+  });
+
   // Echo the correlation id on every response (docs/api-conventions.md).
   app.addHook('onSend', async (req, reply) => {
     reply.header('x-request-id', req.id);
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('cache-control', 'no-store');
+    reply.header('referrer-policy', 'no-referrer');
   });
 
   // Single error funnel — routes throw ApiError, clients only ever see the envelope.

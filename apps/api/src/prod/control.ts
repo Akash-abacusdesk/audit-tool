@@ -43,6 +43,9 @@ export const prodActionInput = z.object({
 });
 export type ProdActionInput = z.infer<typeof prodActionInput>;
 
+/** Body of POST /prod/approvals: the command being approved, without the approval itself. */
+export const prodApprovalRequest = prodActionInput.omit({ approvalId: true, approvalToken: true, requestId: true });
+
 /**
  * Optional approval verifier Dwight wires in once the approval store exists.
  * Receives the approval ref, the acting user, and the scope being targeted.
@@ -50,7 +53,8 @@ export type ProdActionInput = z.infer<typeof prodActionInput>;
 export type VerifyApproval = (
   approvalId: string,
   actorId: string,
-  scope: { orgId: string; projectId?: string | null; environmentId?: string | null }
+  scope: { orgId: string; projectId?: string | null; environmentId?: string | null },
+  cmd: { op: ProdOp; target: string }
 ) => Promise<void>;
 
 /** Pure guard: every prod action must reference an approval. No approval →
@@ -96,7 +100,7 @@ export async function authorizeProdAction(
   await assertScope(scopeReq, input.scope, `prod.control.${input.op}`, PROD_CONTROL_PERMISSION);
   const approvalId = requireApprovalRef(input);
   if (opts.verifyApproval) {
-    await opts.verifyApproval(approvalId, actor.user.id, input.scope);
+    await opts.verifyApproval(approvalId, actor.user.id, input.scope, { op: input.op, target: input.target });
   }
   const resolvedRequestId = input.requestId?.trim() || requestId;
   return { actorId: actor.user.id, requestId: resolvedRequestId, approvalId };

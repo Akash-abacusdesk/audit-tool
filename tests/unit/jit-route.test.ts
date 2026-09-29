@@ -7,27 +7,41 @@ import { jitRoutes } from '../../apps/api/src/routes/jit.js';
 const ORG = '11111111-1111-4111-8111-111111111111';
 
 interface Store {
-  requests: Map<string, { status: string; duration_minutes: number; site_id: string }>;
+  requests: Map<string, { status: string; duration_minutes: number; site_id: string; created_by: string }>;
   tokens: Map<string, { request_id: string; consumed_at: Date | null; expires_at: Date }>;
   grants: Map<string, { status: string }>;
 }
 
-function makePool() {
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+// Two distinct sessions sharing one backing store: 'tok-req' resolves to the
+// requester, 'tok-appr' to a different actor — approve/reject now enforce
+// assertNotSelf, so a realistic lifecycle test needs two identities.
+function makePool(actors: Record<string, { id: string; role: string }> = { 'tok-req': { id: 'u-mgr', role: 'manager' } }) {
   const store: Store = {
     requests: new Map(),
     tokens: new Map(),
     grants: new Map(),
   };
   const audit: unknown[][] = [];
+  const byHash = new Map(Object.entries(actors).map(([tok, a]) => [hashToken(tok), a]));
   const query = async (sql: string, params?: unknown[]) => {
       if (sql.includes('api_sessions')) {
+        const actor = byHash.get(params![0] as string);
+        if (!actor) return { rows: [], rowCount: 0 };
         return {
-          rows: [{ session_id: 's1', id: 'u-mgr', email: 'm@x', display_name: 'M', is_active: true, created_at: new Date() }],
+          rows: [{ session_id: `s-${actor.id}`, id: actor.id, email: `${actor.id}@x`, display_name: actor.id, is_active: true, created_at: new Date() }],
           rowCount: 1,
         };
       }
       if (sql.includes('api_role_bindings')) {
-        return { rows: [{ role: 'manager', org_id: ORG, project_id: null, environment_id: null }], rowCount: 1 };
+        const targetId = params![0] as string;
+        const found = [...byHash.values()].find((a) => a.id === targetId);
+        return found
+          ? { rows: [{ role: found.role, org_id: ORG, project_id: null, environment_id: null }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
       }
       if (sql.includes('api_audit_events')) {
         audit.push(params ?? []);
@@ -38,10 +52,15 @@ function makePool() {
           status: 'pending',
           duration_minutes: params![3] as number,
           site_id: params![1] as string,
+          created_by: params![4] as string,
         });
         return { rows: [{ id: params![0] }], rowCount: 1 };
       }
-      if (sql.includes("SELECT id, status, duration_minutes FROM jit_requests")) {
+      if (sql.includes("SELECT id, status, duration_minutes, created_by FROM jit_requests")) {
+        const r = store.requests.get(params![0] as string);
+        return r ? { rows: [r], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('SELECT created_by, status FROM jit_requests')) {
         const r = store.requests.get(params![0] as string);
         return r ? { rows: [r], rowCount: 1 } : { rows: [], rowCount: 0 };
       }
@@ -100,19 +119,26 @@ async function buildApp(pool: Pool) {
   return app;
 }
 
-const auth = { authorization: 'Bearer tok', 'content-type': 'application/json' };
+const asRequester = { authorization: 'Bearer tok-req', 'content-type': 'application/json' };
+const asApprover = { authorization: 'Bearer tok-appr', 'content-type': 'application/json' };
+const auth = asRequester;
 
 beforeEach(() => {});
 
 describe('S8-D1 JIT grant lifecycle', () => {
   it('requests, approves, redeems once, and revokes a grant', async () => {
-    const { pool, store } = makePool();
+    // Two distinct actors: separation-of-duties (assertNotSelf) blocks the
+    // requester from also being the approver.
+    const { pool, store } = makePool({
+      'tok-req': { id: 'u-dev', role: 'developer' },
+      'tok-appr': { id: 'u-mgr', role: 'manager' },
+    });
     const app = await buildApp(pool);
 
     const reqRes = await app.inject({
       method: 'POST',
       url: '/jit/requests',
-      headers: auth,
+      headers: asRequester,
       payload: { site_id: 'wp-1', reason: 'incident', duration_minutes: 15 },
     });
     expect(reqRes.statusCode).toBe(202);
@@ -121,7 +147,7 @@ describe('S8-D1 JIT grant lifecycle', () => {
     const approveRes = await app.inject({
       method: 'POST',
       url: `/jit/requests/${requestId}/approve`,
-      headers: auth,
+      headers: asApprover,
       payload: {},
     });
     if (approveRes.statusCode !== 200) console.error('APPROVE', approveRes.statusCode, approveRes.body);
@@ -134,7 +160,7 @@ describe('S8-D1 JIT grant lifecycle', () => {
       method: 'POST',
       url: '/jit/redeem',
       headers: auth,
-      payload: { request_id: requestId, token_hash: tokenHash },
+      payload: { request_id: requestId, token },
     });
     expect(redeemRes.statusCode).toBe(200);
     const grant = redeemRes.json().data;
@@ -147,15 +173,19 @@ describe('S8-D1 JIT grant lifecycle', () => {
       method: 'POST',
       url: '/jit/redeem',
       headers: auth,
-      payload: { request_id: requestId, token_hash: tokenHash },
+      payload: { request_id: requestId, token },
     });
     expect(replay.statusCode).toBe(409);
 
-    // Revoke the grant.
+    // The stored hash alone is not a credential.
+    const hashOnly = await app.inject({ method: 'POST', url: '/jit/redeem', headers: auth, payload: { request_id: requestId, token_hash: tokenHash } });
+    expect(hashOnly.statusCode).toBe(422);
+
+    // Revoke the grant (jit.revoke — the approver's role, not the requester's).
     const revoke = await app.inject({
       method: 'POST',
       url: `/jit/grants/${grant.grant_id}/revoke`,
-      headers: auth,
+      headers: asApprover,
       payload: {},
     });
     expect(revoke.statusCode).toBe(200);
@@ -195,5 +225,34 @@ describe('S8-D1 JIT grant lifecycle', () => {
       payload: {},
     });
     expect(approve.statusCode).toBe(403);
+  });
+
+  it('blocks self-approval and self-rejection even when the requester holds jit.approve', async () => {
+    const { pool } = makePool({ 'tok-req': { id: 'u-mgr', role: 'manager' } });
+    const app = await buildApp(pool);
+
+    const reqRes = await app.inject({
+      method: 'POST',
+      url: '/jit/requests',
+      headers: asRequester,
+      payload: { site_id: 'wp-1', reason: 'incident', duration_minutes: 15 },
+    });
+    const requestId = reqRes.json().data.request_id as string;
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/jit/requests/${requestId}/approve`,
+      headers: asRequester,
+      payload: {},
+    });
+    expect(approve.statusCode).toBe(403);
+
+    const reject = await app.inject({
+      method: 'POST',
+      url: `/jit/requests/${requestId}/reject`,
+      headers: asRequester,
+      payload: {},
+    });
+    expect(reject.statusCode).toBe(403);
   });
 });

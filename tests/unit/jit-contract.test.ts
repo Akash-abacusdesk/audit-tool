@@ -44,12 +44,12 @@ describe('S8-D1 contract: JIT DTOs', () => {
     expect(() => jitRequestInput.parse({ site_id: 's', reason: 'x', duration_minutes: 999999 })).toThrow();
   });
 
-  it('requires a 64-char hex token_hash on redeem', () => {
-    expect(() =>
-      jitRedeemInput.parse({ request_id: 'r', token_hash: 'abc' })
-    ).toThrow();
+  it('redeem needs the raw token (or, legacy, a 64-char hex token_hash)', () => {
+    expect(() => jitRedeemInput.parse({ request_id: 'r' })).toThrow();
+    expect(() => jitRedeemInput.parse({ request_id: 'r', token_hash: 'abc' })).toThrow();
     const hex = 'a'.repeat(64);
     expect(jitRedeemInput.parse({ request_id: 'r', token_hash: hex }).token_hash).toBe(hex);
+    expect(jitRedeemInput.parse({ request_id: 'r', token: 'x'.repeat(32) }).token).toBe('x'.repeat(32));
   });
 
   it('validates a revoke input', () => {

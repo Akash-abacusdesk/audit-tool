@@ -8,7 +8,7 @@ import {
   scanJobPayload,
 } from '../../apps/api/src/scheduler/classes.js';
 
-const BASE_COUNT = 11;
+const BASE_COUNT = 12; // + 'notifications' (S9 outbound Telegram alerts)
 
 afterEach(() => {
   // env mutations in these tests must not leak between cases
