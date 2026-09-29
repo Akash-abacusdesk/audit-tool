@@ -81,6 +81,8 @@ export async function runScan(req: ScanRequest, deps: RunDeps = {}): Promise<Sca
       const image = resolve(req.tool);
       if (!image) throw new ScannerNotAvailableError(req.tool);
       const outDir = req.outDir ?? (await mkdtemp(join(tmpdir(), `scan-${req.tool}-`)));
+      const pc = def.invocation.persistentCache;
+      const cacheHost = pc ? process.env[pc.hostEnv] || undefined : undefined;
       const spec: WorkerRunSpec = {
         runId: `scan-${req.scanId}-${req.tool}`,
         jobId: req.jobId,
@@ -90,7 +92,10 @@ export async function runScan(req: ScanRequest, deps: RunDeps = {}): Promise<Sca
         outDir,
         limits: profileOf(req.tool),
         egress: def.invocation.egress ? { mode: def.invocation.egress } : { mode: 'offline' },
-        extraScratch: def.invocation.extraScratch,
+        extraScratch: cacheHost
+          ? def.invocation.extraScratch?.filter((s) => s.path !== pc!.container)
+          : def.invocation.extraScratch,
+        extraRwBinds: cacheHost ? [{ host: cacheHost, container: pc!.container }] : undefined,
       };
       const res = await runWorker(spec);
       finishedAt = res.finishedAt;

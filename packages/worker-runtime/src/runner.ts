@@ -114,7 +114,7 @@ export async function runWorkerJob(spec: WorkerRunSpec): Promise<WorkerRunResult
       env: spec.jobId ? { PLATFORM_JOB_ID: spec.jobId } : {},
       labels: spec.labels ?? {},
       roBinds: spec.workspaceDir ? [{ host: spec.workspaceDir, container: '/workspace' }] : [],
-      rwBinds: [{ host: spec.outDir, container: '/out' }],
+      rwBinds: [{ host: spec.outDir, container: '/out' }, ...(spec.extraRwBinds ?? [])],
       tmpfs: scratch,
       limits,
     });

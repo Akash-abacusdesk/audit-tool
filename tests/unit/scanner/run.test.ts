@@ -116,4 +116,24 @@ describe('registry completeness', () => {
       expect(REGISTRY[t]).toBeDefined();
     }
   });
+  it('mounts the persistent trivy cache instead of a tmpfs when TRIVY_CACHE_HOST_DIR is set', async () => {
+    const specs: WorkerRunSpec[] = [];
+    const capture = async (spec: WorkerRunSpec) => {
+      specs.push(spec);
+      return { runId: spec.runId, status: 'failed', exitCode: 1, startedAt: '', finishedAt: '', logsTail: 'stop' } as WorkerRunResult;
+    };
+    const req = { ...baseReq, tool: 'trivy' };
+    delete process.env.TRIVY_CACHE_HOST_DIR;
+    await runScan(req, { runWorkerJob: capture });
+    process.env.TRIVY_CACHE_HOST_DIR = '/srv/trivy-cache';
+    try {
+      await runScan(req, { runWorkerJob: capture });
+    } finally {
+      delete process.env.TRIVY_CACHE_HOST_DIR;
+    }
+    expect(specs[0]!.extraRwBinds).toBeUndefined();
+    expect(specs[0]!.extraScratch?.some((s) => s.path === '/tmp/trivy-cache')).toBe(true);
+    expect(specs[1]!.extraRwBinds).toEqual([{ host: '/srv/trivy-cache', container: '/tmp/trivy-cache' }]);
+    expect(specs[1]!.extraScratch?.some((s) => s.path === '/tmp/trivy-cache')).toBe(false);
+  });
 });

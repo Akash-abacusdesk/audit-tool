@@ -54,6 +54,8 @@ export interface WorkerRunSpec {
   labels?: Record<string, string>;
   /** extra size-capped tmpfs scratch mounts, e.g. [{ path: '/zap', sizeMb: 512 }] */
   extraScratch?: Array<{ path: string; sizeMb: number }>;
+  /** extra read-write host binds (e.g. a persistent tool cache). The caller vouches for the host path; /out is always added. */
+  extraRwBinds?: Array<{ host: string; container: string }>;
 }
 
 export type WorkerRunStatus = 'completed' | 'failed' | 'timedOut' | 'cancelled';

@@ -77,6 +77,7 @@ export const REGISTRY: Record<string, ScannerDef> = {
       egress: 'bridge', // needs vuln-DB mirror for fresh scans
       cmd: (o) => ['fs', '--format', 'json', '--output', `/out/${o}`, '/workspace'],
       extraScratch: [{ path: '/tmp/trivy-cache', sizeMb: 2048 }],
+      persistentCache: { hostEnv: 'TRIVY_CACHE_HOST_DIR', container: '/tmp/trivy-cache' },
     },
   },
   // npm/pnpm/composer audits: normalized identically; run via host toolchain.

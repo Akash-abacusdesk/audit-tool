@@ -26,6 +26,12 @@ export type Invocation =
       egress?: 'offline' | 'bridge';
       cmd: (outFile: string, workspaceDir?: string, targetUrl?: string) => string[];
       extraScratch?: Array<{ path: string; sizeMb: number }>;
+      /**
+       * Reuse a host directory (named by env var `hostEnv`) at `container` across runs instead of a fresh tmpfs, e.g. so
+       * trivy downloads its ~120MB vulnerability DB once, not on every scan. When the env var is unset the tmpfs above is used.
+       * The directory must be writable by the image user.
+       */
+      persistentCache?: { hostEnv: string; container: string };
       readFrom?: 'file' | 'stdout';
       /** 'text' skips JSON.parse and hands the adapter the raw string (tools with no JSON output, e.g. Lynis). Default 'json'. */
       format?: 'json' | 'text';
