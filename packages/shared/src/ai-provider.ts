@@ -10,6 +10,7 @@
  * OpenAI/Gemini is the same shape again, not a redesign.
  */
 import { ApiError } from './errors.js';
+import { withRetry } from './retry.js';
 
 export interface AiRemediationInput {
   findingId: string;
@@ -70,7 +71,7 @@ export class AnthropicRemediationProvider implements AiRemediationProvider {
   }
 
   async generatePatch(input: AiRemediationInput): Promise<AiRemediationResult> {
-    const f = this.config.fetchImpl ?? fetch;
+    const f = withRetry(this.config.fetchImpl ?? fetch);
     const base = this.config.baseUrl ?? 'https://api.anthropic.com';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 60_000);

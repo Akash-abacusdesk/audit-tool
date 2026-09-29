@@ -77,6 +77,13 @@ export const PERMISSIONS = [
   // Section-15 scoped secret retrieval. Workers never get direct Vaultwarden
   // access; trusted control-plane users may retrieve scoped injected values.
   'secret.read.scoped',
+  // Writing a scoped secret is a separate grant: read access must not imply the ability to overwrite.
+  'secret.write.scoped',
+  // Section-16 emergency lockdown (compromise-response runbook action 5).
+  // Deliberately not granted to `manager` — separation of duties: the same
+  // role that can trigger production actions should not unilaterally be the
+  // one that can also lift a lockdown blocking them.
+  'platform.lockdown',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -87,15 +94,40 @@ export type Permission = (typeof PERMISSIONS)[number];
  * (no business permissions); user management lives with security_admin alone.
  */
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  manager: ['org.manage', 'project.manage', 'audit.read', 'audit.deep', 'staging.manage', 'update.manage', 'finding.remediate', 'example.create', 'example.read', 'git.manage', 'git.read',   'scheduler.read', 'scheduler.manage', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.request', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
+  manager: ['org.manage', 'project.manage', 'audit.read', 'audit.deep', 'staging.manage', 'update.manage', 'finding.remediate', 'example.create', 'example.read', 'git.manage', 'git.read',   'scheduler.read', 'scheduler.manage', 'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.request', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped', 'secret.write.scoped'],
   team_lead: ['project.manage', 'role.assign', 'staging.manage', 'update.manage', 'finding.remediate', 'example.create', 'example.read', 'git.manage', 'git.read', 'finding.read', 'finding.update', 'scan.ingest', 'jit.request', 'jit.approve'],
   project_coordinator: ['example.create', 'example.read', 'git.read', 'finding.read'],
   developer: ['example.read', 'git.read', 'finding.read', 'jit.request', 'finding.remediate'],
-  security_admin: ['user.manage', 'role.assign', 'audit.read', 'audit.deep', 'scheduler.read', 'scheduler.manage',   'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped'],
+  security_admin: ['user.manage', 'role.assign', 'audit.read', 'audit.deep', 'scheduler.read', 'scheduler.manage',   'finding.read', 'finding.update', 'scan.ingest', 'prod.execute', 'jit.approve', 'jit.revoke', 'telegram.manage', 'secret.read.scoped', 'secret.write.scoped', 'platform.lockdown'],
 };
 
 export function permissionsOfRole(role: Role): readonly Permission[] {
   return ROLE_PERMISSIONS[role];
+}
+
+/**
+ * Privilege ceiling for role.assign: which roles a holder of a given role may
+ * grant to someone else. Without this, team_lead (which holds role.assign for
+ * project-scoped delegation) could hand out `manager` or `security_admin` —
+ * a colluding pair escalates to full control. security_admin is the only role
+ * meant to administer the full role set.
+ */
+const ASSIGNABLE_ROLES: Record<Role, readonly Role[]> = {
+  manager: [],
+  team_lead: ['project_coordinator', 'developer'],
+  project_coordinator: [],
+  developer: [],
+  security_admin: ROLES,
+};
+
+/** Union of roles the actor's bindings covering `target` are allowed to grant. */
+export function assignableRolesFor(bindings: readonly RoleBindingView[], target: ScopeRef): Set<Role> {
+  const out = new Set<Role>();
+  for (const b of bindings) {
+    if (!bindingCovers(b, target)) continue;
+    for (const r of ASSIGNABLE_ROLES[b.role]) out.add(r);
+  }
+  return out;
 }
 
 /** A resolved binding as seen by the resolver (DB rows map 1:1). */

@@ -9,6 +9,7 @@
  * (PRD §14.1) — this client only sends messages, it grants nothing.
  */
 import { ApiError } from './errors.js';
+import { withRetry } from './retry.js';
 
 export interface TelegramClientConfig {
   /** Bot token from @BotFather. Never logged; treat as a secret. */
@@ -44,7 +45,7 @@ export class TelegramClient {
   constructor(private readonly config: TelegramClientConfig) {}
 
   async sendMessage(chatId: string | number, text: string, opts?: SendMessageOptions): Promise<TelegramSendResult> {
-    const f = this.config.fetchImpl ?? fetch;
+    const f = withRetry(this.config.fetchImpl ?? fetch);
     const base = this.config.baseUrl ?? 'https://api.telegram.org';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 10_000);

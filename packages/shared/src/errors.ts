@@ -42,6 +42,10 @@ export class ApiError extends Error {
  */
 export function toApiError(err: unknown): ApiError {
   if (err instanceof ApiError) return err;
+  // A route that calls schema.parse() directly throws a ZodError: that is a bad request, not a server fault.
+  if ((err as { name?: unknown } | null)?.name === 'ZodError' && Array.isArray((err as { issues?: unknown }).issues)) {
+    return new ApiError('VALIDATION_ERROR', 'invalid request', { issues: (err as { issues: unknown[] }).issues });
+  }
   const status = (err as { statusCode?: unknown } | null)?.statusCode;
   if (typeof status === 'number' && status >= 400 && status < 500) {
     const entries = Object.entries(ERROR_CODES) as [ErrorCode, number][];

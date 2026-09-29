@@ -84,10 +84,18 @@ export const jitRequestInput = z.object({
 export type JitRequestInput = z.infer<typeof jitRequestInput>;
 
 /** Redemption presents the SHA-256 hex of the opaque one-time token. */
-export const jitRedeemInput = z.object({
-  request_id: z.string().min(1).max(200),
-  token_hash: z.string().regex(/^[0-9a-fA-F]{64}$/),
-});
+/**
+ * Redeem with the raw one-time token (hashed server-side, so a copy of the stored hash - DB read, backup - is not a
+ * usable credential). `token_hash` is the legacy client-hashed form; the API refuses it unless
+ * JIT_ALLOW_LEGACY_TOKEN_HASH=true.
+ */
+export const jitRedeemInput = z
+  .object({
+    request_id: z.string().min(1).max(200),
+    token: z.string().min(16).max(512).optional(),
+    token_hash: z.string().regex(/^[0-9a-fA-F]{64}$/).optional(),
+  })
+  .refine((v) => v.token !== undefined || v.token_hash !== undefined, { message: 'token is required' });
 
 export type JitRedeemInput = z.infer<typeof jitRedeemInput>;
 

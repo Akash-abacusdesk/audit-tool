@@ -39,7 +39,8 @@ export const PROD_ALLOW_LIST: Record<ProdOp, AllowListEntry> = {
   rollback: { op: 'rollback', bin: '/usr/bin/kubectl', args: ['rollout', 'undo', '$TARGET'] },
 };
 
-const TARGET_RE = /^[A-Za-z0-9._:-]+$/;
+// First char alnum: a leading '-' would let a single-dash flag through as the operand.
+const TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 /** Hard-rejected substrings — covers docker exec, raw shells, pipes, etc. */
 const DENY_PATTERNS = [/docker\s+exec/i, /\/bin\/(sh|bash|zsh|csh)/i, /[|;&`$]/, /\.\./, /--/];
 

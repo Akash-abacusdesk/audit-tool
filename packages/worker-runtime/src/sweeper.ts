@@ -1,5 +1,6 @@
 import type { ContainerRow } from './engine.js';
 import {
+  OWNER_ID,
   listWorkerContainers,
   listWorkerNetworks,
   removeContainer,
@@ -34,6 +35,7 @@ function resolveOpt(explicit: number | undefined, envKey: string, fallback: numb
 
 export async function sweepOnce(minAgeMs?: number): Promise<OrphanSweepTickResult> {
   const minAge = resolveOpt(minAgeMs, 'WORKER_ORPHAN_MIN_AGE_MS', 300_000);
+  const foreignMinAge = resolveOpt(undefined, 'WORKER_FOREIGN_MIN_AGE_MS', 4_200_000);
   const now = Date.now();
   const activeIds = new Set(getActiveRunIds());
   let sweptContainers = 0;
@@ -45,6 +47,23 @@ export async function sweepOnce(minAgeMs?: number): Promise<OrphanSweepTickResul
       const runId = runIdFromWorkerName(row.name);
       if (runId !== null && activeIds.has(runId)) continue;
       if (now - row.createdAtMs < minAge) continue;
+      // Another replica's container may be a live run this process can't see: only reap it once it is
+      // older than any run's max timeout (foreign or unlabelled = legacy).
+      const foreign = row.labels['com.platform.owner'] !== OWNER_ID;
+      if (foreign && now - row.createdAtMs < foreignMinAge) continue;
+      try {
+        await removeContainer(row.id, true);
+        sweptContainers++;
+      } catch {}
+    }
+  } catch {}
+
+  // Staging environments are long-lived on purpose but never forever: a crash mid-provision (or a forgotten
+  // destroy) would otherwise leak WP+MySQL containers. Their networks go via the network pass below once empty.
+  const stagingMaxAge = resolveOpt(undefined, 'STAGING_ORPHAN_MAX_AGE_MS', 6 * 3_600_000);
+  try {
+    for (const row of await listWorkerContainers('com.platform.staging=true')) {
+      if (now - row.createdAtMs < stagingMaxAge) continue;
       try {
         await removeContainer(row.id, true);
         sweptContainers++;

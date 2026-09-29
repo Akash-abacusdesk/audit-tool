@@ -16,6 +16,7 @@
  */
 import { ApiError } from './errors.js';
 import type { SecretScope, SecretsStore } from './secrets.js';
+import { withRetry } from './retry.js';
 
 export interface VaultwardenClientConfig {
   /** Base URL of the external Vaultwarden microservice's private API, e.g. https://vaultwarden.internal. */
@@ -49,7 +50,7 @@ export class VaultwardenClientStore implements SecretsStore {
     path: string,
     body?: unknown
   ): Promise<Response> {
-    const f = this.config.fetchImpl ?? fetch;
+    const f = withRetry(this.config.fetchImpl ?? fetch);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 5000);
     try {

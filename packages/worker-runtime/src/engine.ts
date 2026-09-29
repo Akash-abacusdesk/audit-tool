@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { hostname } from 'node:os';
 import type { ResourceLimits } from './types.js';
 
 export interface ExecResult {
@@ -10,13 +11,17 @@ export interface ExecResult {
 const WORKER_LABEL = 'com.platform.worker=true';
 const NETWORK_LABEL = 'com.platform.worker.net=true';
 const MAX_BUFFER = 16 * 1024 * 1024;
+/** A wedged docker daemon must not hang a job forever. `docker wait` opts out (0): the run watchdog bounds it. */
+const DEFAULT_TIMEOUT_MS = Number(process.env.DOCKER_CMD_TIMEOUT_MS ?? 600_000);
+/** Stable per-replica id stamped on every worker container so one replica's sweeper never reaps another's live runs. */
+export const OWNER_ID = process.env.WORKER_OWNER_ID ?? hostname();
 
-export function execDocker(args: string[]): Promise<ExecResult> {
+export function execDocker(args: string[], timeoutMs = DEFAULT_TIMEOUT_MS): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     execFile(
       'docker',
       args,
-      { windowsHide: true, maxBuffer: MAX_BUFFER },
+      { windowsHide: true, maxBuffer: MAX_BUFFER, timeout: timeoutMs, killSignal: 'SIGKILL' },
       (err, stdout, stderr) => {
         const code = (err as NodeJS.ErrnoException | null)?.code;
         if (err && typeof code !== 'number') {
@@ -91,6 +96,7 @@ export function buildRunArgs(o: WorkerContainerOpts): string[] {
     args.push('--env', `${k}=${v}`);
   }
   args.push('--label', WORKER_LABEL);
+  args.push('--label', `com.platform.owner=${OWNER_ID}`);
   for (const [k, v] of Object.entries(o.labels)) {
     args.push('--label', `${k}=${v}`);
   }
@@ -133,7 +139,7 @@ export async function stopContainer(id: string, graceSeconds: number): Promise<v
 export async function waitContainer(id: string): Promise<number> {
   let r: ExecResult;
   try {
-    r = await execDocker(['wait', id]);
+    r = await execDocker(['wait', id], 0);
   } catch {
     return -1;
   }
