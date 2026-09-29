@@ -8,6 +8,7 @@ import {
   siteUpdateInput,
   teamMemberCreateInput,
   teamMemberUpdateInput,
+  type OverviewDto,
   type SiteDto,
   type TaskDto,
   type TeamMemberDto,
@@ -98,6 +99,53 @@ export async function siteRoutes(app: FastifyInstance, deps: Deps): Promise<void
       [userId, orgId, projectId]
     );
   }
+
+  // ---------------------------------------------------------------- overview
+
+  app.get('/overview', { preHandler: requirePermission('project.manage') }, async (req) => {
+    const orgs = orgsWith(req, 'project.manage');
+    const q = <T extends object>(sql: string) => deps.pool.query<T>(sql, [orgs]);
+    const [sev, sites, team, tasks, jit, recent] = await Promise.all([
+      q<{ severity: string; n: number }>(
+        `SELECT f.severity, count(*)::int AS n FROM api_scan_findings f JOIN api_projects p ON p.id = f.project_id
+          WHERE p.org_id = ANY($1::uuid[]) AND f.status IN ('open', 'in_progress') GROUP BY f.severity`
+      ),
+      q<{ total: number; active: number; failing: number; unassigned: number }>(
+        `SELECT count(*)::int AS total,
+                count(*) FILTER (WHERE s.status = 'active')::int AS active,
+                count(*) FILTER (WHERE lr.status IN ('failed', 'partial'))::int AS failing,
+                count(*) FILTER (WHERE s.owner_user_id IS NULL)::int AS unassigned
+           FROM api_sites s
+           LEFT JOIN LATERAL (SELECT status FROM api_scan_runs r WHERE r.project_id = s.project_id ORDER BY r.created_at DESC LIMIT 1) lr ON true
+          WHERE s.org_id = ANY($1::uuid[])`
+      ),
+      q<{ n: number }>(
+        `SELECT count(*)::int AS n FROM api_users u WHERE u.is_active AND ${VISIBLE_USER}`
+      ),
+      q<{ status: string; n: number }>(
+        `SELECT t.status, count(*)::int AS n FROM task_outbox t JOIN api_sites s ON s.id = t.site_id
+          WHERE s.org_id = ANY($1::uuid[]) GROUP BY t.status`
+      ),
+      deps.pool.query<{ n: number }>("SELECT count(*)::int AS n FROM jit_requests WHERE status = 'pending'"),
+      q<{ scan_id: string; tool_name: string; status: string; site: string; created_at: Date }>(
+        `SELECT r.scan_id, r.tool_name, r.status, s.name AS site, r.created_at
+           FROM api_scan_runs r JOIN api_sites s ON s.project_id = r.project_id
+          WHERE s.org_id = ANY($1::uuid[]) ORDER BY r.created_at DESC LIMIT 6`
+      ),
+    ]);
+    const bySev = Object.fromEntries(sev.rows.map((r) => [r.severity, r.n]));
+    const byTask = Object.fromEntries(tasks.rows.map((r) => [r.status, r.n]));
+    const s0 = sites.rows[0] ?? { total: 0, active: 0, failing: 0, unassigned: 0 };
+    const out: OverviewDto = {
+      findings: { critical: bySev.critical ?? 0, high: bySev.high ?? 0, medium: bySev.medium ?? 0, low: bySev.low ?? 0, info: bySev.info ?? 0 },
+      sites: s0,
+      team: { active: team.rows[0]?.n ?? 0 },
+      tasks: { pending: byTask.pending ?? 0, sent: byTask.sent ?? 0, failed: byTask.failed ?? 0 },
+      access: { pendingRequests: jit.rows[0]?.n ?? 0 },
+      recentScans: recent.rows.map((r) => ({ scanId: r.scan_id, tool: r.tool_name, status: r.status, site: r.site, at: r.created_at.toISOString() })),
+    };
+    return ok(out);
+  });
 
   // ---------------------------------------------------------------- sites
 

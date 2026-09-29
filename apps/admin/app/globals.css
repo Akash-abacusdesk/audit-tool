@@ -1,104 +1,39 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens only. Every visual rule lives in the components as Tailwind utilities; there are no custom
+ * selectors or component classes here (Tailwind v4 generates bg-canvas, text-ink, ring-line ... from these).
+ *
+ * Language: graphite neutrals (one cool hue, low chroma) with a single emerald accent. Severity colours are
+ * semantic, not brand. Shape rule: containers 16px, controls 10px, chips 6px.
+ */
 @theme {
-  --color-bg: #08090d;
-  --color-bg-alt: #0d1017;
-  --color-surface: rgba(22, 26, 35, 0.6);
-  --color-surface-solid: #151923;
-  --color-surface-2: #1c212d;
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-strong: rgba(255, 255, 255, 0.14);
-  --color-text: #eef1f6;
-  --color-text-dim: #8891a3;
-  --color-text-faint: #5b6577;
-  --color-accent: #6d8bff;
-  --color-accent-2: #8f6dff;
-  --color-critical: #ff5470;
-  --color-high: #ff9d4d;
-  --color-medium: #ffd23d;
-  --color-low: #3ddc97;
-  --color-info: #6d8bff;
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-}
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
-body {
-  background-color: var(--color-bg);
-  background-image:
-    radial-gradient(ellipse 800px 500px at 15% -10%, rgba(109, 139, 255, 0.12), transparent),
-    radial-gradient(ellipse 600px 400px at 100% 0%, rgba(143, 109, 255, 0.08), transparent);
-  background-attachment: fixed;
-  color: var(--color-text);
-  font-family: var(--font-sans);
-}
+  --color-canvas: oklch(0.155 0.006 250);
+  --color-raised: oklch(0.2 0.007 250);
+  --color-sunken: oklch(0.125 0.006 250);
+  --color-line: oklch(1 0 0 / 0.07);
+  --color-line-strong: oklch(1 0 0 / 0.14);
 
-@layer components {
-  /* ---- Surfaces ---- */
-  .surface {
-    @apply relative rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)]
-           shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_8px_24px_-12px_rgba(0,0,0,0.5)]
-           backdrop-blur-xl;
-  }
-  .surface-solid {
-    @apply rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-solid)]
-           shadow-[0_8px_24px_-12px_rgba(0,0,0,0.5)];
-  }
-  .row-hover {
-    @apply transition-colors hover:bg-white/[0.035];
-  }
+  --color-ink: oklch(0.965 0.004 250);
+  --color-ink-dim: oklch(0.78 0.01 250);
+  --color-ink-faint: oklch(0.66 0.012 250);
 
-  /* ---- Buttons ---- */
-  .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-white
-           transition-all disabled:opacity-40 disabled:cursor-not-allowed
-           bg-gradient-to-b from-[var(--color-accent)] to-[#5a72e0]
-           shadow-[0_1px_0_rgba(255,255,255,0.25)_inset,0_4px_12px_-4px_rgba(109,139,255,0.5)]
-           hover:shadow-[0_1px_0_rgba(255,255,255,0.25)_inset,0_6px_16px_-4px_rgba(109,139,255,0.65)];
-  }
-  .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium
-           transition-all disabled:opacity-40 disabled:cursor-not-allowed
-           bg-white/[0.03] text-[var(--color-text-dim)] border border-[var(--color-border)]
-           hover:bg-white/[0.06] hover:text-[var(--color-text)] hover:border-[var(--color-border-strong)];
-  }
-  .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium
-           transition-all disabled:opacity-40 disabled:cursor-not-allowed
-           bg-[var(--color-critical)]/10 text-[var(--color-critical)] border border-[var(--color-critical)]/20
-           hover:bg-[var(--color-critical)]/20;
-  }
+  --color-accent: oklch(0.8 0.15 162);
+  --color-accent-strong: oklch(0.73 0.15 162);
+  --color-on-accent: oklch(0.19 0.04 162);
 
-  /* ---- Forms ---- */
-  .input {
-    @apply w-full rounded-xl bg-black/20 border border-[var(--color-border)] px-3.5 py-2.5 text-sm
-           text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]
-           transition-shadow focus:outline-none focus:border-[var(--color-accent)]/50
-           focus:shadow-[0_0_0_3px_rgba(109,139,255,0.15)];
-  }
-  .label {
-    @apply text-[11px] font-semibold text-[var(--color-text-faint)] uppercase tracking-wider;
-  }
+  --color-critical: oklch(0.72 0.18 22);
+  --color-high: oklch(0.77 0.15 55);
+  --color-medium: oklch(0.85 0.13 92);
+  --color-low: oklch(0.77 0.1 225);
+  --color-info: oklch(0.72 0.02 250);
 
-  /* ---- Nav ---- */
-  .sidebar-link {
-    @apply relative z-10 flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-[var(--color-text-dim)]
-           transition-colors hover:text-[var(--color-text)];
-  }
-  .sidebar-link-active {
-    @apply relative z-10 flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm font-medium text-white transition-colors;
-  }
+  --shadow-float: inset 0 1px 0 0 oklch(1 0 0 / 0.06), 0 24px 48px -24px oklch(0.05 0.02 250 / 0.75);
+  --shadow-hi: inset 0 1px 0 0 oklch(1 0 0 / 0.07);
+  --shadow-accent: inset 0 1px 0 0 oklch(1 0 0 / 0.3), 0 8px 20px -8px oklch(0.8 0.15 162 / 0.55);
 
-  /* ---- Badges ---- */
-  .badge-critical { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-[var(--color-critical)]/12 text-[var(--color-critical)] ring-1 ring-inset ring-[var(--color-critical)]/20; }
-  .badge-high     { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-[var(--color-high)]/12 text-[var(--color-high)] ring-1 ring-inset ring-[var(--color-high)]/20; }
-  .badge-medium   { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-[var(--color-medium)]/12 text-[var(--color-medium)] ring-1 ring-inset ring-[var(--color-medium)]/20; }
-  .badge-low      { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-[var(--color-low)]/12 text-[var(--color-low)] ring-1 ring-inset ring-[var(--color-low)]/20; }
-  .badge-info     { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-[var(--color-info)]/12 text-[var(--color-info)] ring-1 ring-inset ring-[var(--color-info)]/20; }
-  .badge-neutral  { @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-white/[0.06] text-[var(--color-text-dim)] ring-1 ring-inset ring-[var(--color-border)]; }
-
-  .dot { @apply h-1.5 w-1.5 rounded-full bg-current; }
-
-  /* ---- Skeleton ---- */
-  .skeleton {
-    @apply animate-pulse rounded-lg bg-white/[0.06];
-  }
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
 }

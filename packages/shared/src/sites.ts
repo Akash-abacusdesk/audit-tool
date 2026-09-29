@@ -74,6 +74,17 @@ export interface TeamMemberDto {
   createdAt: string;
 }
 
+/** Landing-page aggregates for the admin, limited to the orgs the admin manages. */
+export interface OverviewDto {
+  /** open + in-progress findings by severity */
+  findings: { critical: number; high: number; medium: number; low: number; info: number };
+  sites: { total: number; active: number; failing: number; unassigned: number };
+  team: { active: number };
+  tasks: { pending: number; sent: number; failed: number };
+  access: { pendingRequests: number };
+  recentScans: { scanId: string; tool: string; status: string; site: string; at: string }[];
+}
+
 export type TaskStatus = 'pending' | 'sent' | 'failed';
 
 export interface TaskDto {

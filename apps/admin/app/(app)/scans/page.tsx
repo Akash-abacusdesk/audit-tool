@@ -1,69 +1,59 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import * as motion from 'motion/react-m';
+import { Binoculars } from '@phosphor-icons/react';
 import type { Page, ScanRunDto } from '@platform/shared';
-import { apiFetch } from '../../../lib/api';
 import { useMeContext } from '../../../lib/MeContext';
-import { PageHeader } from '../../../components/PageHeader';
-import { SkeletonRows } from '../../../components/Skeleton';
+import { useApi } from '../../../lib/useApi';
+import { Badge, EmptyState, PageHeader, Panel, SkeletonRows, rise, stagger, type Tone } from '../../../components/ui';
 
-const STATUS_BADGE: Record<ScanRunDto['status'], string> = {
-  completed: 'badge-low',
-  partial: 'badge-medium',
-  failed: 'badge-critical',
+const STATUS: Record<ScanRunDto['status'], { label: string; tone: Tone }> = {
+  completed: { label: 'Completed', tone: 'accent' },
+  partial: { label: 'Incomplete', tone: 'medium' },
+  failed: { label: 'Failed', tone: 'critical' },
 };
 
 export default function ScansPage() {
   const me = useMeContext();
   const orgId = me.bindings[0]?.orgId;
-  const [items, setItems] = useState<ScanRunDto[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!orgId) return;
-    apiFetch<Page<ScanRunDto>>(`/scans?orgId=${orgId}`)
-      .then((page) => setItems(page.items))
-      .catch((e) => setError(e instanceof Error ? e.message : 'failed to load scans'));
-  }, [orgId]);
+  const scans = useApi<Page<ScanRunDto>>(orgId ? `/scans?orgId=${orgId}&limit=100` : null);
+  const items = scans.data?.items ?? null;
 
   return (
     <div>
-      <PageHeader title="Scan Runs" subtitle="Every scanner execution, with its finding counts." />
-
-      {error && <p className="rounded-lg bg-[var(--color-critical)]/10 px-3 py-2 text-sm text-[var(--color-critical)]">{error}</p>}
-      {!error && items === null && <SkeletonRows />}
-      {items !== null && items.length === 0 && (
-        <div className="surface flex flex-col items-center justify-center gap-1 py-16 text-center">
-          <p className="text-sm font-medium">No scan runs</p>
-          <p className="text-sm text-[var(--color-text-dim)]">Nothing has been scanned yet.</p>
-        </div>
-      )}
-
-      {items !== null && items.length > 0 && (
-        <div className="surface divide-y divide-[var(--color-border)] overflow-hidden">
-          {items.map((r, i) => (
-            <motion.div
-              key={r.id}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: Math.min(i * 0.025, 0.3), duration: 0.2 }}
-              className="row-hover flex items-center gap-3 px-4 py-3.5"
-            >
-              <span className={STATUS_BADGE[r.status]}>
-                <span className="dot" />
-                {r.status}
-              </span>
-              <span className="flex-1 truncate text-sm">
-                {r.tool.name} <span className="text-[var(--color-text-faint)]">·</span> {r.target.ref ?? 'unknown target'}
-              </span>
-              <span className="text-xs text-[var(--color-text-faint)]">
-                {r.findingCounts.critical} critical / {r.findingCounts.total} total
-              </span>
-            </motion.div>
-          ))}
-        </div>
-      )}
+      <PageHeader title="Scans" description="Every scanner run and how many findings it produced." />
+      <Panel flush>
+        {scans.error && <p className="p-5 text-sm text-critical">{scans.error}</p>}
+        {!scans.error && items === null && <SkeletonRows count={6} />}
+        {items?.length === 0 && (
+          <EmptyState icon={<Binoculars size={20} />} title="No scans yet">
+            Results show up here as soon as a scanner reports for one of your sites.
+          </EmptyState>
+        )}
+        {items && items.length > 0 && (
+          <motion.ul variants={stagger(0.03)} initial="hidden" animate="show" className="divide-y divide-line">
+            {items.map((r) => {
+              const s = STATUS[r.status];
+              return (
+                <motion.li key={r.id} variants={rise} className="flex items-center gap-4 px-5 py-3.5 transition-colors duration-200 hover:bg-white/[0.035]">
+                  <Badge tone={s.tone} dot className="w-24 justify-center">
+                    {s.label}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{r.tool.name}</div>
+                    <div className="truncate font-mono text-xs text-ink-faint">{r.target.ref ?? 'unknown target'}</div>
+                  </div>
+                  <div className="text-right text-xs text-ink-faint">
+                    <span className={r.findingCounts.critical ? 'tabular-nums text-critical' : 'tabular-nums'}>{r.findingCounts.critical}</span> critical
+                    <span className="mx-1.5">/</span>
+                    <span className="tabular-nums text-ink-dim">{r.findingCounts.total}</span> total
+                  </div>
+                </motion.li>
+              );
+            })}
+          </motion.ul>
+        )}
+      </Panel>
     </div>
   );
 }

@@ -20,7 +20,7 @@ export function setStepUpPrompter(fn: StepUpPrompter | null): void {
 
 /**
  * Every call goes through the same-origin /api-proxy/* rewrite (next.config.ts)
- * to the real API — no CORS, token never leaves this origin.
+ * to the real API: no CORS, token never leaves this origin.
  */
 export async function apiFetch<T>(
   path: string,

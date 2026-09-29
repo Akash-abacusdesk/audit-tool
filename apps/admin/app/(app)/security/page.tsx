@@ -1,161 +1,163 @@
 'use client';
 
 import { useState } from 'react';
-import { apiFetch, ApiRequestError } from '../../../lib/api';
-import { PageHeader } from '../../../components/PageHeader';
+import { Copy, Fingerprint, LockKeyOpen } from '@phosphor-icons/react';
+import { apiFetch } from '../../../lib/api';
+import { errMsg } from '../../../lib/useApi';
+import { Button, Field, Input, PageHeader, Panel, RevealGroup, RevealItem, useToast } from '../../../components/ui';
 
 type Enrollment = { secret: string; otpauthUri: string };
+const codeInput = 'font-mono tracking-[0.3em]';
 
 /**
  * Privileged step-up and authenticator (TOTP) enrollment. The admin plane needs a fresh step-up; once an
  * authenticator is confirmed, step-up also needs a 6-digit code (or a one-time recovery code).
  */
 export default function SecurityPage() {
-  const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  // step-up
+  const toast = useToast();
+  const [busy, setBusy] = useState<string | null>(null);
   const [su, setSu] = useState({ password: '', code: '', recoveryCode: '' });
-  // enrollment
   const [password, setPassword] = useState('');
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
   const [confirmCode, setConfirmCode] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
-  // disable
   const [dis, setDis] = useState({ password: '', code: '', recoveryCode: '' });
 
-  async function run(label: string, fn: () => Promise<void>) {
-    setBusy(true);
-    setMessage(null);
+  async function run(key: string, fn: () => Promise<void>, fallback: string) {
+    setBusy(key);
     try {
       await fn();
     } catch (e) {
-      setMessage({ kind: 'err', text: e instanceof ApiRequestError ? e.message : `${label} failed` });
+      toast.error(errMsg(e, fallback));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
-
-  const stepUp = (e: React.FormEvent) => {
-    e.preventDefault();
-    void run('step-up', async () => {
-      const body: Record<string, string> = { password: su.password };
-      if (su.code) body.code = su.code;
-      if (su.recoveryCode) body.recoveryCode = su.recoveryCode;
-      await apiFetch('/auth/step-up', { method: 'POST', body });
-      setSu({ password: '', code: '', recoveryCode: '' });
-      setMessage({ kind: 'ok', text: 'Step-up granted. Privileged actions are unlocked for a short time.' });
-    });
-  };
-
-  const enroll = (e: React.FormEvent) => {
-    e.preventDefault();
-    void run('enroll', async () => {
-      setEnrollment(await apiFetch<Enrollment>('/auth/mfa/enroll', { method: 'POST', body: { password } }));
-      setPassword('');
-      setRecoveryCodes(null);
-    });
-  };
-
-  const confirm = (e: React.FormEvent) => {
-    e.preventDefault();
-    void run('confirm', async () => {
-      const r = await apiFetch<{ recoveryCodes: string[] }>('/auth/mfa/confirm', { method: 'POST', body: { code: confirmCode } });
-      setRecoveryCodes(r.recoveryCodes);
-      setEnrollment(null);
-      setConfirmCode('');
-      setMessage({ kind: 'ok', text: 'Authenticator enabled. Save the recovery codes now - they are shown once.' });
-    });
-  };
-
-  const disable = (e: React.FormEvent) => {
-    e.preventDefault();
-    void run('disable', async () => {
-      const body: Record<string, string> = { password: dis.password };
-      if (dis.code) body.code = dis.code;
-      if (dis.recoveryCode) body.recoveryCode = dis.recoveryCode;
-      await apiFetch('/auth/mfa/disable', { method: 'POST', body });
-      setDis({ password: '', code: '', recoveryCode: '' });
-      setMessage({ kind: 'ok', text: 'Authenticator disabled.' });
-    });
-  };
+  const optional = (o: Record<string, string>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v));
 
   return (
     <div>
-      <PageHeader title="Security" subtitle="Step-up access and authenticator app (two-factor) for privileged actions." />
-      {message && (
-        <p
-          className={`mb-4 max-w-4xl rounded-lg px-3 py-2 text-sm ${
-            message.kind === 'ok'
-              ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-              : 'bg-[var(--color-critical)]/10 text-[var(--color-critical)]'
-          }`}
-        >
-          {message.text}
-        </p>
-      )}
-
-      <div className="grid max-w-4xl grid-cols-1 gap-6 md:grid-cols-2">
-        <form onSubmit={stepUp} className="surface h-fit p-5">
-          <h2 className="mb-4 text-sm font-semibold">Step up</h2>
-          <label className="label mb-1.5 block">Password</label>
-          <input className="input mb-3.5" type="password" autoComplete="current-password" value={su.password} onChange={(e) => setSu((s) => ({ ...s, password: e.target.value }))} required />
-          <label className="label mb-1.5 block">Authenticator code (if enabled)</label>
-          <input className="input mb-3.5" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={su.code} onChange={(e) => setSu((s) => ({ ...s, code: e.target.value }))} />
-          <label className="label mb-1.5 block">or recovery code</label>
-          <input className="input mb-5" value={su.recoveryCode} onChange={(e) => setSu((s) => ({ ...s, recoveryCode: e.target.value }))} />
-          <button className="btn-primary w-full" disabled={busy}>Step up</button>
-        </form>
-
-        <div className="space-y-6">
-          {!enrollment && !recoveryCodes && (
-            <form onSubmit={enroll} className="surface h-fit p-5">
-              <h2 className="mb-4 text-sm font-semibold">Enable authenticator app</h2>
-              <label className="label mb-1.5 block">Password</label>
-              <input className="input mb-5" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-              <button className="btn-primary w-full" disabled={busy}>Start enrollment</button>
+      <PageHeader title="Account security" description="Unlock privileged actions and protect your account with an authenticator app." />
+      <RevealGroup className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-2">
+        <RevealItem>
+          <Panel>
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void run('stepup', async () => {
+                  await apiFetch('/auth/step-up', { method: 'POST', body: optional(su), noStepUp: true });
+                  setSu({ password: '', code: '', recoveryCode: '' });
+                  toast.success('Unlocked. Privileged actions are available for a few minutes.');
+                }, 'Could not unlock.');
+              }}
+            >
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Unlock privileged actions</h2>
+                <p className="mt-0.5 text-xs leading-5 text-ink-faint">Managing sites, the team and production needs a recent confirmation.</p>
+              </div>
+              <Field label="Password" htmlFor="su-pass"><Input id="su-pass" type="password" autoComplete="current-password" value={su.password} onChange={(e) => setSu((s) => ({ ...s, password: e.target.value }))} required /></Field>
+              <Field label="Authenticator code" htmlFor="su-code" hint="Only if an authenticator is turned on."><Input id="su-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} className={codeInput} value={su.code} onChange={(e) => setSu((s) => ({ ...s, code: e.target.value }))} /></Field>
+              <Field label="Recovery code" htmlFor="su-rec" hint="Use one if you lost your device."><Input id="su-rec" className="font-mono" value={su.recoveryCode} onChange={(e) => setSu((s) => ({ ...s, recoveryCode: e.target.value }))} /></Field>
+              <Button type="submit" variant="primary" icon={<LockKeyOpen size={16} />} loading={busy === 'stepup'} className="mt-1">Unlock</Button>
             </form>
+          </Panel>
+        </RevealItem>
+
+        <RevealItem className="flex flex-col gap-4">
+          {!enrollment && !recoveryCodes && (
+            <Panel>
+              <form
+                className="flex flex-col gap-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run('enroll', async () => {
+                    setEnrollment(await apiFetch<Enrollment>('/auth/mfa/enroll', { method: 'POST', body: { password } }));
+                    setPassword('');
+                  }, 'Could not start enrollment.');
+                }}
+              >
+                <div>
+                  <h2 className="text-sm font-semibold tracking-tight">Authenticator app</h2>
+                  <p className="mt-0.5 text-xs leading-5 text-ink-faint">Adds a six-digit code to every unlock, so a stolen password is not enough.</p>
+                </div>
+                <Field label="Password" htmlFor="en-pass"><Input id="en-pass" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
+                <Button type="submit" variant="secondary" icon={<Fingerprint size={16} />} loading={busy === 'enroll'}>Start setup</Button>
+              </form>
+            </Panel>
           )}
 
           {enrollment && (
-            <form onSubmit={confirm} className="surface h-fit p-5">
-              <h2 className="mb-2 text-sm font-semibold">Add to your authenticator</h2>
-              <p className="mb-2 text-xs text-[var(--color-text-dim)]">
-                Enter this key in your authenticator app (time-based, 6 digits), then type the code it shows.
-              </p>
-              <code className="mb-3 block break-all rounded bg-black/30 p-2 text-xs">{enrollment.secret}</code>
-              <a className="mb-4 block break-all text-xs underline" href={enrollment.otpauthUri}>Open in authenticator (otpauth link)</a>
-              <label className="label mb-1.5 block">Code</label>
-              <input className="input mb-5" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={confirmCode} onChange={(e) => setConfirmCode(e.target.value)} required />
-              <button className="btn-primary w-full" disabled={busy}>Confirm and enable</button>
-            </form>
+            <Panel>
+              <form
+                className="flex flex-col gap-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run('confirm', async () => {
+                    const r = await apiFetch<{ recoveryCodes: string[] }>('/auth/mfa/confirm', { method: 'POST', body: { code: confirmCode } });
+                    setRecoveryCodes(r.recoveryCodes);
+                    setEnrollment(null);
+                    setConfirmCode('');
+                    toast.success('Authenticator is on. Save your recovery codes now.');
+                  }, 'That code did not match.');
+                }}
+              >
+                <div>
+                  <h2 className="text-sm font-semibold tracking-tight">Add it to your app</h2>
+                  <p className="mt-0.5 text-xs leading-5 text-ink-faint">Enter this key in your authenticator (time-based, 6 digits), then type the code it shows.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="min-w-0 flex-1 break-all rounded-[10px] bg-sunken px-3.5 py-2.5 font-mono text-[13px] text-accent ring-1 ring-inset ring-line">{enrollment.secret}</code>
+                  <Button type="button" variant="secondary" icon={<Copy size={16} />} onClick={() => navigator.clipboard.writeText(enrollment.secret).then(() => toast.success('Key copied.'))}>Copy</Button>
+                </div>
+                <Field label="Code" htmlFor="cf-code"><Input id="cf-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} className={codeInput} value={confirmCode} onChange={(e) => setConfirmCode(e.target.value)} required /></Field>
+                <Button type="submit" variant="primary" loading={busy === 'confirm'}>Confirm and turn on</Button>
+              </form>
+            </Panel>
           )}
 
           {recoveryCodes && (
-            <div className="surface h-fit p-5">
-              <h2 className="mb-2 text-sm font-semibold">Recovery codes</h2>
-              <p className="mb-3 text-xs text-[var(--color-text-dim)]">Each works once if you lose your device. They will not be shown again.</p>
-              <div className="grid grid-cols-2 gap-2 font-mono text-sm">
+            <Panel>
+              <h2 className="text-sm font-semibold tracking-tight">Recovery codes</h2>
+              <p className="mb-4 mt-0.5 text-xs leading-5 text-ink-faint">Each works once if you lose your device. They are not shown again.</p>
+              <div className="grid grid-cols-2 gap-2">
                 {recoveryCodes.map((c) => (
-                  <code key={c} className="rounded bg-black/30 px-2 py-1">{c}</code>
+                  <code key={c} className="rounded-[10px] bg-sunken px-3 py-2 text-center font-mono text-[13px] ring-1 ring-inset ring-line">{c}</code>
                 ))}
               </div>
-              <button className="btn-ghost mt-4 w-full" onClick={() => setRecoveryCodes(null)}>I saved them</button>
-            </div>
+              <div className="mt-4 flex gap-2">
+                <Button variant="secondary" icon={<Copy size={16} />} onClick={() => navigator.clipboard.writeText(recoveryCodes.join('\n')).then(() => toast.success('Codes copied.'))}>Copy all</Button>
+                <Button variant="ghost" onClick={() => setRecoveryCodes(null)}>I saved them</Button>
+              </div>
+            </Panel>
           )}
 
-          <form onSubmit={disable} className="surface h-fit p-5">
-            <h2 className="mb-4 text-sm font-semibold">Disable authenticator</h2>
-            <label className="label mb-1.5 block">Password</label>
-            <input className="input mb-3.5" type="password" autoComplete="current-password" value={dis.password} onChange={(e) => setDis((s) => ({ ...s, password: e.target.value }))} required />
-            <label className="label mb-1.5 block">Authenticator code</label>
-            <input className="input mb-3.5" inputMode="numeric" maxLength={6} value={dis.code} onChange={(e) => setDis((s) => ({ ...s, code: e.target.value }))} />
-            <label className="label mb-1.5 block">or recovery code</label>
-            <input className="input mb-5" value={dis.recoveryCode} onChange={(e) => setDis((s) => ({ ...s, recoveryCode: e.target.value }))} />
-            <button className="btn-danger w-full" disabled={busy}>Disable</button>
-          </form>
-        </div>
-      </div>
+          <Panel>
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void run('disable', async () => {
+                  await apiFetch('/auth/mfa/disable', { method: 'POST', body: optional(dis), noStepUp: true });
+                  setDis({ password: '', code: '', recoveryCode: '' });
+                  toast.success('Authenticator turned off.');
+                }, 'Could not turn it off.');
+              }}
+            >
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Turn off authenticator</h2>
+                <p className="mt-0.5 text-xs leading-5 text-ink-faint">Needs your password and a current code or recovery code.</p>
+              </div>
+              <Field label="Password" htmlFor="di-pass"><Input id="di-pass" type="password" autoComplete="current-password" value={dis.password} onChange={(e) => setDis((s) => ({ ...s, password: e.target.value }))} required /></Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Code" htmlFor="di-code"><Input id="di-code" inputMode="numeric" maxLength={6} className={codeInput} value={dis.code} onChange={(e) => setDis((s) => ({ ...s, code: e.target.value }))} /></Field>
+                <Field label="Or recovery code" htmlFor="di-rec"><Input id="di-rec" className="font-mono" value={dis.recoveryCode} onChange={(e) => setDis((s) => ({ ...s, recoveryCode: e.target.value }))} /></Field>
+              </div>
+              <Button type="submit" variant="danger" loading={busy === 'disable'}>Turn off</Button>
+            </form>
+          </Panel>
+        </RevealItem>
+      </RevealGroup>
     </div>
   );
 }

@@ -1,87 +1,64 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import * as motion from 'motion/react-m';
+import { CaretRight, CheckCircle } from '@phosphor-icons/react';
 import type { FindingDto, Page, Severity } from '@platform/shared';
 import { SEVERITIES } from '@/lib/enums';
-import { apiFetch } from '../../../lib/api';
+import { SEVERITY_TONE } from '../../../lib/tones';
 import { useMeContext } from '../../../lib/MeContext';
-import { PageHeader } from '../../../components/PageHeader';
-import { SkeletonRows } from '../../../components/Skeleton';
+import { useApi } from '../../../lib/useApi';
+import { Badge, EmptyState, PageHeader, Panel, Segmented, SkeletonRows, rise, stagger } from '../../../components/ui';
 
-const SEVERITY_BADGE: Record<Severity, string> = {
-  critical: 'badge-critical',
-  high: 'badge-high',
-  medium: 'badge-medium',
-  low: 'badge-low',
-  info: 'badge-info',
-};
+const SEV_DOT: Record<Severity, string> = { critical: 'text-critical', high: 'text-high', medium: 'text-medium', low: 'text-low', info: 'text-info' };
 
 export default function FindingsPage() {
   const me = useMeContext();
   const orgId = me.bindings[0]?.orgId;
   const [severity, setSeverity] = useState<Severity | 'all'>('all');
-  const [items, setItems] = useState<FindingDto[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!orgId) return;
-    setItems(null);
-    const q = new URLSearchParams({ orgId });
-    if (severity !== 'all') q.set('severity', severity);
-    apiFetch<Page<FindingDto>>(`/findings?${q.toString()}`)
-      .then((page) => setItems(page.items))
-      .catch((e) => setError(e instanceof Error ? e.message : 'failed to load findings'));
-  }, [orgId, severity]);
+  const query = orgId ? `/findings?${new URLSearchParams({ orgId, limit: '100', ...(severity !== 'all' ? { severity } : {}) }).toString()}` : null;
+  const findings = useApi<Page<FindingDto>>(query);
+  const items = findings.data?.items ?? null;
 
   return (
     <div>
-      <PageHeader title="Findings" subtitle="Every security finding across your projects, ranked by severity." />
-
-      <div className="mb-5 flex flex-wrap gap-2">
-        <button onClick={() => setSeverity('all')} className={severity === 'all' ? 'btn-primary' : 'btn-ghost'}>
-          All
-        </button>
-        {SEVERITIES.map((s) => (
-          <button key={s} onClick={() => setSeverity(s)} className={severity === s ? 'btn-primary' : 'btn-ghost'}>
-            <span className={`dot ${severity === s ? 'text-white' : ''}`} style={severity !== s ? { color: `var(--color-${s})` } : undefined} />
-            {s}
-          </button>
-        ))}
-      </div>
-
-      {error && <p className="rounded-lg bg-[var(--color-critical)]/10 px-3 py-2 text-sm text-[var(--color-critical)]">{error}</p>}
-      {!error && items === null && <SkeletonRows />}
-      {items !== null && items.length === 0 && (
-        <div className="surface flex flex-col items-center justify-center gap-1 py-16 text-center">
-          <p className="text-sm font-medium">No findings</p>
-          <p className="text-sm text-[var(--color-text-dim)]">Nothing matches this filter yet.</p>
-        </div>
-      )}
-
-      {items !== null && items.length > 0 && (
-        <div className="surface divide-y divide-[var(--color-border)] overflow-hidden">
-          {items.map((f, i) => (
-            <motion.div
-              key={f.id}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: Math.min(i * 0.025, 0.3), duration: 0.2 }}
-            >
-              <Link href={`/findings/${f.id}`} className="row-hover flex items-center gap-3 px-4 py-3.5">
-                <span className={SEVERITY_BADGE[f.severity]}>
-                  <span className="dot" />
-                  {f.severity}
-                </span>
-                <span className="flex-1 truncate text-sm">{f.title}</span>
-                <span className="text-xs text-[var(--color-text-faint)]">{f.scanner}</span>
-                <span className="badge-neutral">{f.status.replace('_', ' ')}</span>
-              </Link>
-            </motion.div>
-          ))}
-        </div>
-      )}
+      <PageHeader
+        title="Findings"
+        description="Every security finding across your sites, most severe first."
+        actions={<Segmented label="Filter by severity" value={severity} onChange={setSeverity} options={[{ value: 'all', label: 'All' }, ...SEVERITIES.map((s) => ({ value: s, label: s, dot: SEV_DOT[s] }))]} />}
+      />
+      <Panel flush>
+        {findings.error && <p className="p-5 text-sm text-critical">{findings.error}</p>}
+        {!findings.error && items === null && <SkeletonRows count={8} />}
+        {items?.length === 0 && (
+          <EmptyState icon={<CheckCircle size={20} />} title="No findings here">
+            {severity === 'all' ? 'Nothing has been reported yet.' : `No ${severity} findings are open.`}
+          </EmptyState>
+        )}
+        {items && items.length > 0 && (
+          <motion.ul key={severity} variants={stagger(0.025)} initial="hidden" animate="show" className="divide-y divide-line">
+            {items.map((f) => (
+              <motion.li key={f.id} variants={rise}>
+                <Link href={`/findings/${f.id}`} className="group flex items-center gap-4 px-5 py-3.5 outline-none transition-colors duration-200 hover:bg-white/[0.035] focus-visible:bg-white/[0.05]">
+                  <Badge tone={SEVERITY_TONE[f.severity]} dot className="w-[4.75rem] justify-center capitalize">
+                    {f.severity}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-ink">{f.title}</div>
+                    <div className="truncate font-mono text-xs text-ink-faint">
+                      {f.scanner}
+                      {f.ruleId ? ` · ${f.ruleId}` : ''}
+                    </div>
+                  </div>
+                  <Badge className="hidden capitalize sm:inline-flex">{f.status.replace('_', ' ')}</Badge>
+                  <CaretRight size={16} className="text-ink-faint transition-transform duration-200 ease-spring group-hover:translate-x-0.5 group-hover:text-ink-dim" />
+                </Link>
+              </motion.li>
+            ))}
+          </motion.ul>
+        )}
+      </Panel>
     </div>
   );
 }

@@ -1,118 +1,144 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import * as motion from 'motion/react-m';
+import { AnimatePresence } from 'motion/react';
+import { BellRinging, BellSlash, Check, UserPlus, UsersThree } from '@phosphor-icons/react';
 import type { TeamMemberDto } from '@platform/shared';
-import { apiFetch, ApiRequestError } from '../../../lib/api';
-import { PageHeader } from '../../../components/PageHeader';
+import { apiFetch } from '../../../lib/api';
+import { useOverview } from '../../../lib/OverviewContext';
+import { errMsg, useApi } from '../../../lib/useApi';
+import { Avatar, Badge, Button, EmptyState, Field, Input, PageHeader, Panel, SkeletonRows, spring, useToast } from '../../../components/ui';
 
-const ROLE_LABEL: Record<string, string> = { manager: 'admin', security_admin: 'security admin', team_lead: 'team lead', developer: 'developer', project_coordinator: 'coordinator' };
+const ROLE_LABEL: Record<string, string> = { manager: 'Admin', security_admin: 'Security admin', team_lead: 'Team lead', developer: 'Developer', project_coordinator: 'Coordinator' };
 
 export default function TeamPage() {
-  const [members, setMembers] = useState<TeamMemberDto[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  const { refresh: refreshOverview } = useOverview();
+  const team = useApi<TeamMemberDto[]>('/team-members');
   const [form, setForm] = useState({ displayName: '', email: '', password: '', telegramChatId: '' });
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<Record<string, string>>({});
-
-  async function refresh() {
-    try {
-      setMembers(await apiFetch<TeamMemberDto[]>('/team-members'));
-    } catch (e) {
-      setError(e instanceof ApiRequestError ? e.message : 'failed to load team');
-    }
-  }
-  useEffect(() => {
-    void refresh();
-  }, []);
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    setError(null);
     try {
-      await apiFetch('/team-members', {
-        method: 'POST',
-        body: { displayName: form.displayName, email: form.email, password: form.password, ...(form.telegramChatId ? { telegramChatId: form.telegramChatId } : {}) },
-      });
+      await apiFetch('/team-members', { method: 'POST', body: { displayName: form.displayName, email: form.email, password: form.password, ...(form.telegramChatId ? { telegramChatId: form.telegramChatId } : {}) } });
+      toast.success(`${form.displayName} was added to the team.`);
       setForm({ displayName: '', email: '', password: '', telegramChatId: '' });
-      await refresh();
+      await Promise.all([team.reload(), refreshOverview()]);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : 'could not add the team member');
+      toast.error(errMsg(err, 'Could not add the team member.'));
     } finally {
       setSaving(false);
     }
   }
 
   async function saveChat(m: TeamMemberDto) {
-    setError(null);
+    setSavingId(m.id);
     try {
       const v = (editing[m.id] ?? '').trim();
       await apiFetch(`/team-members/${m.id}`, { method: 'PATCH', body: { telegramChatId: v === '' ? null : v } });
-      setEditing((s) => {
-        const { [m.id]: _drop, ...rest } = s;
-        return rest;
-      });
-      await refresh();
+      setEditing(({ [m.id]: _drop, ...rest }) => rest);
+      toast.success(v === '' ? `Alerts are off for ${m.displayName}.` : `${m.displayName} will get alerts on Telegram.`);
+      await team.reload();
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : 'could not save the chat id');
+      toast.error(errMsg(err, 'Could not save the chat id.'));
+    } finally {
+      setSavingId(null);
     }
   }
 
   return (
     <div>
-      <PageHeader title="Team" subtitle="The people who operate your sites. Their Telegram chat receives the alert when a scan on their site fails." />
-      <div className="grid max-w-5xl grid-cols-1 gap-6 lg:grid-cols-[1fr_20rem]">
-        <div>
-          {error && <p className="mb-4 rounded-lg bg-[var(--color-critical)]/10 px-3 py-2 text-sm text-[var(--color-critical)]">{error}</p>}
-          <div className="surface divide-y divide-[var(--color-border)] overflow-hidden">
-            {members === null && <p className="p-4 text-sm text-[var(--color-text-dim)]">Loading…</p>}
-            {members?.length === 0 && <p className="p-4 text-sm text-[var(--color-text-dim)]">No team members yet.</p>}
-            {members?.map((m) => {
-              const draft = editing[m.id];
-              return (
-                <div key={m.id} className="row-hover px-4 py-3.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{m.displayName}</span>
-                    {m.roles.map((r) => (
-                      <span key={r} className="badge-info">{ROLE_LABEL[r] ?? r}</span>
-                    ))}
-                    {!m.isActive && <span className="badge-neutral">inactive</span>}
-                  </div>
-                  <div className="text-xs text-[var(--color-text-dim)]">
-                    {m.email} · {m.sites.length ? `handles ${m.sites.map((s) => s.name).join(', ')}` : 'no sites assigned'}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <input
-                      className="input !py-1.5 text-xs"
-                      placeholder="Telegram chat id (not set: no alerts)"
-                      value={draft ?? m.telegramChatId ?? ''}
-                      onChange={(e) => setEditing((s) => ({ ...s, [m.id]: e.target.value }))}
-                    />
-                    <button className="btn-ghost !px-3 !py-1.5 text-xs" disabled={draft === undefined || draft === (m.telegramChatId ?? '')} onClick={() => saveChat(m)}>
-                      Save
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      <PageHeader title="Team" description="The people who run your sites. Their Telegram chat gets the alert when a scan on one of their sites fails." />
+      <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-6 lg:grid-cols-[minmax(0,1fr)_21rem]">
+        <Panel flush>
+          {team.error && <p className="p-5 text-sm text-critical">{team.error}</p>}
+          {!team.error && team.data === null && <SkeletonRows count={4} />}
+          {team.data?.length === 0 && (
+            <EmptyState icon={<UsersThree size={20} />} title="No team members yet">
+              Add the first person on the right, then assign them to a site.
+            </EmptyState>
+          )}
+          <ul className="divide-y divide-line">
+            <AnimatePresence initial={false}>
+              {team.data?.map((m) => {
+                const draft = editing[m.id];
+                const dirty = draft !== undefined && draft.trim() !== (m.telegramChatId ?? '');
+                return (
+                  <motion.li key={m.id} layout="position" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="px-5 py-4">
+                    <div className="flex items-start gap-3.5">
+                      <Avatar name={m.displayName} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[15px] font-medium tracking-tight">{m.displayName}</span>
+                          {m.roles.map((r) => (
+                            <Badge key={r} tone="info">
+                              {ROLE_LABEL[r] ?? r}
+                            </Badge>
+                          ))}
+                          {!m.isActive && <Badge>Inactive</Badge>}
+                        </div>
+                        <div className="truncate text-xs text-ink-faint">
+                          {m.email}
+                          {m.sites.length > 0 ? `, runs ${m.sites.map((s) => s.name).join(', ')}` : ', no sites assigned'}
+                        </div>
+                        <div className="mt-3 flex items-center gap-2">
+                          <span className={m.telegramChatId ? 'text-accent' : 'text-medium'} title={m.telegramChatId ? 'Receives alerts' : 'No alerts'}>
+                            {m.telegramChatId ? <BellRinging size={18} /> : <BellSlash size={18} />}
+                          </span>
+                          <Input
+                            aria-label={`Telegram chat id for ${m.displayName}`}
+                            placeholder="Telegram chat id"
+                            value={draft ?? m.telegramChatId ?? ''}
+                            onChange={(e) => setEditing((s) => ({ ...s, [m.id]: e.target.value }))}
+                            className="!h-8 max-w-56 font-mono !text-[13px]"
+                          />
+                          <AnimatePresence>
+                            {dirty && (
+                              <motion.span initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} transition={spring}>
+                                <Button size="sm" variant="secondary" icon={<Check size={16} />} loading={savingId === m.id} onClick={() => saveChat(m)}>
+                                  Save
+                                </Button>
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.li>
+                );
+              })}
+            </AnimatePresence>
+          </ul>
+        </Panel>
 
-        <form onSubmit={create} className="surface h-fit p-5">
-          <h2 className="mb-4 text-sm font-semibold">Add team member</h2>
-          <label className="label mb-1.5 block">Name</label>
-          <input className="input mb-3.5" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} required />
-          <label className="label mb-1.5 block">Email</label>
-          <input className="input mb-3.5" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required />
-          <label className="label mb-1.5 block">Initial password (12+ characters)</label>
-          <input className="input mb-3.5" type="password" autoComplete="new-password" minLength={12} value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required />
-          <label className="label mb-1.5 block">Telegram chat id</label>
-          <input className="input mb-2" placeholder="e.g. 123456789" value={form.telegramChatId} onChange={(e) => setForm((f) => ({ ...f, telegramChatId: e.target.value }))} />
-          <p className="mb-5 text-xs text-[var(--color-text-dim)]">
-            The person must open a chat with the alerts bot and press <b>Start</b> first — Telegram does not let bots message someone who hasn&apos;t. Their id can be found by messaging <b>@userinfobot</b>.
-          </p>
-          <button className="btn-primary w-full" disabled={saving}>{saving ? 'Adding…' : 'Add team member'}</button>
-        </form>
+        <Panel className="lg:sticky lg:top-24">
+          <form onSubmit={create} className="flex flex-col gap-4">
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight">Add a team member</h2>
+              <p className="mt-0.5 text-xs leading-5 text-ink-faint">They can sign in and see the sites they are assigned to.</p>
+            </div>
+            <Field label="Name" htmlFor="tm-name">
+              <Input id="tm-name" value={form.displayName} onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))} required />
+            </Field>
+            <Field label="Email" htmlFor="tm-email">
+              <Input id="tm-email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required />
+            </Field>
+            <Field label="Initial password" htmlFor="tm-pass" hint="At least 12 characters. They can change it after signing in.">
+              <Input id="tm-pass" type="password" autoComplete="new-password" minLength={12} value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required />
+            </Field>
+            <Field label="Telegram chat id" htmlFor="tm-chat" hint="They must open the alerts bot and press Start first, or Telegram will not deliver. Their id is shown by @userinfobot.">
+              <Input id="tm-chat" placeholder="123456789" className="font-mono" value={form.telegramChatId} onChange={(e) => setForm((f) => ({ ...f, telegramChatId: e.target.value }))} />
+            </Field>
+            <Button type="submit" variant="primary" icon={<UserPlus size={16} />} loading={saving} className="mt-1 w-full">
+              Add team member
+            </Button>
+          </form>
+        </Panel>
       </div>
     </div>
   );

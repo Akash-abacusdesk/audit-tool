@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, ApiRequestError, setStepUpPrompter } from '../lib/api';
+import { Button, Dialog, Field, Input } from './ui';
 
 /**
  * Privileged actions (sites, team, production) need a fresh step-up. This dialog is what apiFetch opens when the API
@@ -51,30 +52,30 @@ export default function StepUpDialog() {
       await apiFetch('/auth/step-up', { method: 'POST', body, noStepUp: true });
       close(true);
     } catch (err) {
-      setError(err instanceof ApiRequestError ? err.message : 'step-up failed');
+      setError(err instanceof ApiRequestError ? err.message : 'Step-up failed. Try again.');
     } finally {
       setBusy(false);
     }
   }
 
-  if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="stepup-title">
-      <form onSubmit={submit} className="surface-solid w-full max-w-sm p-6">
-        <h2 id="stepup-title" className="text-base font-semibold">Confirm it&apos;s you</h2>
-        <p className="mb-4 mt-1 text-xs text-[var(--color-text-dim)]">
-          This action changes who can access what. Re-enter your password to continue; it stays unlocked for a few minutes.
-        </p>
-        {error && <p className="mb-3 rounded-lg bg-[var(--color-critical)]/10 px-3 py-2 text-sm text-[var(--color-critical)]">{error}</p>}
-        <label className="label mb-1.5 block">Password</label>
-        <input className="input mb-3.5" type="password" autoFocus autoComplete="current-password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required />
-        <label className="label mb-1.5 block">Authenticator code (if enabled)</label>
-        <input className="input mb-5" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
-        <div className="flex gap-2">
-          <button type="button" className="btn-ghost flex-1" onClick={() => close(false)}>Cancel</button>
-          <button className="btn-primary flex-1" disabled={busy}>{busy ? 'Checking…' : 'Continue'}</button>
+    <Dialog open={open} onClose={() => close(false)} title="Confirm it is you" description="This action changes who can access what. Re-enter your password to continue; it stays unlocked for a few minutes.">
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        <Field label="Password" htmlFor="stepup-password" error={error}>
+          <Input id="stepup-password" type="password" autoFocus autoComplete="current-password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required />
+        </Field>
+        <Field label="Authenticator code" htmlFor="stepup-code" hint="Only if you have turned on an authenticator app.">
+          <Input id="stepup-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} className="font-mono tracking-[0.3em]" value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
+        </Field>
+        <div className="mt-1 flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => close(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" loading={busy}>
+            Continue
+          </Button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }

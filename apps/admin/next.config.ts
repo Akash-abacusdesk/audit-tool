@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
   agentRules: false,
   // Dev only: let the HMR socket connect when the app is opened as 127.0.0.1 rather than localhost.
   allowedDevOrigins: ['127.0.0.1'],
-  experimental: { optimizePackageImports: ['motion'] },
+  experimental: { optimizePackageImports: ['motion', '@phosphor-icons/react'] },
   async headers() {
     const isProd = process.env.NODE_ENV === 'production';
     // Next's own bootstrap needs inline scripts/styles, so script-src keeps 'unsafe-inline'; everything else is
@@ -45,7 +45,11 @@ const nextConfig: NextConfig = {
     ];
   },
   async rewrites() {
-    return [{ source: '/api-proxy/:path*', destination: `${API_BASE_URL}/api/v1/:path*` }];
+    return [
+      // The JIT routes are mounted at the API root (no /api/v1 prefix); this rule must come before the general one.
+      { source: '/api-proxy/jit/:path*', destination: `${API_BASE_URL}/jit/:path*` },
+      { source: '/api-proxy/:path*', destination: `${API_BASE_URL}/api/v1/:path*` },
+    ];
   },
 };
 

@@ -1,123 +1,130 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import * as motion from 'motion/react-m';
+import { AnimatePresence } from 'motion/react';
+import { BellRinging, Check, Plus } from '@phosphor-icons/react';
 import type { TelegramAuthorizationDto } from '@platform/shared';
-import { apiFetch, ApiRequestError } from '../../../lib/api';
-import { PageHeader } from '../../../components/PageHeader';
+import { apiFetch } from '../../../lib/api';
+import { cn } from '../../../lib/cn';
+import { errMsg, useApi } from '../../../lib/useApi';
+import { Badge, Button, EmptyState, Field, Input, PageHeader, Panel, SkeletonRows, spring, useToast } from '../../../components/ui';
 
-const COMMON_ACTIONS = ['finding.alert.critical', 'jit.request', 'jit.approve', 'jit.revoke'];
+const EVENTS: { value: string; label: string; help: string }[] = [
+  { value: 'finding.alert.critical', label: 'Critical findings', help: 'A new critical finding is discovered' },
+  { value: 'jit.request', label: 'Access requests', help: 'Someone asks for live site access' },
+  { value: 'jit.approve', label: 'Approve access', help: 'May approve access from Telegram' },
+  { value: 'jit.revoke', label: 'Revoke access', help: 'May revoke access from Telegram' },
+];
 
 export default function TelegramPage() {
-  const [items, setItems] = useState<TelegramAuthorizationDto[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
+  const bindings = useApi<TelegramAuthorizationDto[]>('/telegram/authorizations');
   const [form, setForm] = useState({ bot_id: '', chat_id: '', user_id: '', actions: [] as string[] });
   const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  async function refresh() {
-    try {
-      setItems(await apiFetch<TelegramAuthorizationDto[]>('/telegram/authorizations'));
-    } catch (e) {
-      setError(e instanceof ApiRequestError ? e.message : 'failed to load authorizations');
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  function toggleAction(action: string) {
-    setForm((f) => ({
-      ...f,
-      actions: f.actions.includes(action) ? f.actions.filter((a) => a !== action) : [...f.actions, action],
-    }));
-  }
+  const toggle = (a: string) => setForm((f) => ({ ...f, actions: f.actions.includes(a) ? f.actions.filter((x) => x !== a) : [...f.actions, a] }));
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    setError(null);
     try {
       await apiFetch('/telegram/authorizations', { method: 'POST', body: form });
+      toast.success('Chat connected.');
       setForm({ bot_id: '', chat_id: '', user_id: '', actions: [] });
-      refresh();
-    } catch (e2) {
-      setError(e2 instanceof ApiRequestError ? e2.message : 'create failed');
+      await bindings.reload();
+    } catch (err) {
+      toast.error(errMsg(err, 'Could not connect the chat.'));
     } finally {
       setSaving(false);
     }
   }
 
   async function revoke(id: string) {
+    setBusy(id);
     try {
       await apiFetch(`/telegram/authorizations/${id}`, { method: 'DELETE' });
-      refresh();
-    } catch (e) {
-      setError(e instanceof ApiRequestError ? e.message : 'revoke failed');
+      toast.success('Chat disconnected.');
+      await bindings.reload();
+    } catch (err) {
+      toast.error(errMsg(err, 'Could not disconnect the chat.'));
+    } finally {
+      setBusy(null);
     }
   }
 
   return (
     <div>
-      <PageHeader title="Telegram Alerts" subtitle="Chats authorized to receive control-plane alerts and act on them." />
-      <div className="grid max-w-4xl grid-cols-1 gap-6 md:grid-cols-2">
-        <div>
-          {error && <p className="mb-4 rounded-lg bg-[var(--color-critical)]/10 px-3 py-2 text-sm text-[var(--color-critical)]">{error}</p>}
+      <PageHeader title="Alert routing" description="Chats allowed to receive alerts about critical findings and to act on access requests. Site owners and admins are alerted about failed scans separately, from their own profile." />
+      <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-6 lg:grid-cols-[minmax(0,1fr)_21rem]">
+        <Panel flush>
+          {bindings.error && <p className="p-5 text-sm text-critical">{bindings.error}</p>}
+          {!bindings.error && bindings.data === null && <SkeletonRows count={3} />}
+          {bindings.data?.length === 0 && (
+            <EmptyState icon={<BellRinging size={20} />} title="No chats connected">
+              Connect a chat on the right to send critical-finding alerts or take access decisions from Telegram.
+            </EmptyState>
+          )}
+          <ul className="divide-y divide-line">
+            <AnimatePresence initial={false}>
+              {bindings.data?.map((b) => (
+                <motion.li key={b.id} layout="position" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="flex flex-wrap items-center gap-4 px-5 py-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-mono text-[13px] font-medium">chat {b.chat_id}</div>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {b.actions.map((a) => (
+                        <Badge key={a}>{EVENTS.find((e) => e.value === a)?.label ?? a}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                  {b.revoked_at ? (
+                    <Badge>Disconnected</Badge>
+                  ) : (
+                    <Button variant="danger" size="sm" loading={busy === b.id} onClick={() => revoke(b.id)}>
+                      Disconnect
+                    </Button>
+                  )}
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
+        </Panel>
 
-          <div className="surface divide-y divide-[var(--color-border)] overflow-hidden">
-            {items?.length === 0 && <p className="p-4 text-sm text-[var(--color-text-dim)]">No bindings yet.</p>}
-            {items?.map((it, i) => (
-              <motion.div
-                key={it.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: Math.min(i * 0.02, 0.3) }}
-                className="row-hover flex items-center gap-3 px-4 py-3.5"
-              >
-                <div className="flex-1">
-                  <div className="text-sm font-medium">chat {it.chat_id}</div>
-                  <div className="text-xs text-[var(--color-text-dim)]">{it.actions.join(', ')}</div>
-                </div>
-                {it.revoked_at ? (
-                  <span className="badge-neutral">revoked</span>
-                ) : (
-                  <button className="btn-danger" onClick={() => revoke(it.id)}>Revoke</button>
-                )}
-              </motion.div>
-            ))}
-          </div>
-        </div>
-
-        <form onSubmit={create} className="surface h-fit p-5">
-          <h2 className="mb-4 text-sm font-semibold">New binding</h2>
-
-          <label className="label mb-1.5 block">Bot ID</label>
-          <input className="input mb-3.5" value={form.bot_id} onChange={(e) => setForm((f) => ({ ...f, bot_id: e.target.value }))} required />
-
-          <label className="label mb-1.5 block">Chat ID</label>
-          <input className="input mb-3.5" value={form.chat_id} onChange={(e) => setForm((f) => ({ ...f, chat_id: e.target.value }))} required />
-
-          <label className="label mb-1.5 block">User ID</label>
-          <input className="input mb-3.5" value={form.user_id} onChange={(e) => setForm((f) => ({ ...f, user_id: e.target.value }))} required />
-
-          <label className="label mb-2 block">Actions</label>
-          <div className="mb-5 flex flex-wrap gap-2">
-            {COMMON_ACTIONS.map((a) => (
-              <button
-                type="button"
-                key={a}
-                onClick={() => toggleAction(a)}
-                className={form.actions.includes(a) ? 'btn-primary' : 'btn-ghost'}
-              >
-                {a}
-              </button>
-            ))}
-          </div>
-
-          <button type="submit" className="btn-primary w-full" disabled={saving || form.actions.length === 0}>
-            {saving ? 'Saving…' : 'Create binding'}
-          </button>
-        </form>
+        <Panel className="lg:sticky lg:top-24">
+          <form onSubmit={create} className="flex flex-col gap-4">
+            <h2 className="text-sm font-semibold tracking-tight">Connect a chat</h2>
+            <Field label="Bot" htmlFor="tg-bot">
+              <Input id="tg-bot" value={form.bot_id} onChange={(e) => setForm((f) => ({ ...f, bot_id: e.target.value }))} required />
+            </Field>
+            <Field label="Chat id" htmlFor="tg-chat">
+              <Input id="tg-chat" className="font-mono" value={form.chat_id} onChange={(e) => setForm((f) => ({ ...f, chat_id: e.target.value }))} required />
+            </Field>
+            <Field label="Telegram user id" htmlFor="tg-user">
+              <Input id="tg-user" className="font-mono" value={form.user_id} onChange={(e) => setForm((f) => ({ ...f, user_id: e.target.value }))} required />
+            </Field>
+            <fieldset>
+              <legend className="mb-2 text-[13px] font-medium text-ink-dim">What this chat can do</legend>
+              <div className="flex flex-col gap-1.5">
+                {EVENTS.map((ev) => {
+                  const on = form.actions.includes(ev.value);
+                  return (
+                    <button key={ev.value} type="button" role="checkbox" aria-checked={on} onClick={() => toggle(ev.value)} className={cn('flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none ring-1 ring-inset transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-accent/70', on ? 'bg-accent/[0.08] ring-accent/30' : 'bg-sunken ring-line hover:ring-line-strong')}>
+                      <span className={cn('flex size-4 shrink-0 items-center justify-center rounded-[5px] ring-1 ring-inset transition-colors', on ? 'bg-accent text-on-accent ring-accent' : 'ring-line-strong')}>{on && <Check size={12} weight="bold" />}</span>
+                      <span>
+                        <span className="block text-[13px] font-medium">{ev.label}</span>
+                        <span className="block text-xs text-ink-faint">{ev.help}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+            <Button type="submit" variant="primary" icon={<Plus size={16} />} loading={saving} disabled={form.actions.length === 0} className="w-full">
+              Connect chat
+            </Button>
+          </form>
+        </Panel>
       </div>
     </div>
   );
