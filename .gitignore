@@ -6,3 +6,4 @@ dist/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
 data/
+graphify-out/

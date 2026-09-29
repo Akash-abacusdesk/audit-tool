@@ -62,7 +62,7 @@ See `contracts/wp-events.schema.json` for the full field/enum list.
   Human approval happens server-side in central.
 - **Redeem (one-time):** central issues an opaque one-time token after approval;
   `POST /wp-json/s8/v1/jit/redeem { token, request_id }` → central
-  `POST /api/v1/jit/redeem { token_hash: sha256(token), request_id }` →
+  `POST /api/v1/jit/redeem { token, request_id }` (central hashes it; `token_hash` is refused) →
   `200 { grant_id, ttl_seconds, requester }`. Central marks the token consumed
   atomically. WP provisions a temporary `administrator`, stores **only**
   `token_hash` (hash-only storage), and schedules a single-fire `s8_jit_expire_user`

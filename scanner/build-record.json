@@ -56,8 +56,9 @@
       "tool": "trivy",
       "tag": "devsecops/scanner-trivy:0.55.0",
       "base": "ghcr.io/aquasecurity/trivy@sha256:35e972d4c97895711cb2de6594cc1774b61e6b9dc7661ef73a76dd649f006c8d",
-      "image_id": "sha256:28bb86ce96b1d72f387f2b0c38e93bede3bb32028d2cf0407e73fca862a3d0aa",
-      "verified": "image built only — vuln-DB download did not complete this session, no live scan verified"
+      "image_id": "sha256:2858bed29d7a",
+      "verified": "fixed cache-volume permission bug (chown before USER 10001) and a flaky ghcr.io HTTP/2 stream error (GODEBUG=http2client=0); DB downloaded live (117.81 MiB), real scan of alpine:3.19 returned real CVE findings",
+      "runtime_requirement": "set GODEBUG=http2client=0 and --timeout >=10-15m for the first cold DB pull on slow/flaky links"
     },
     {
       "tool": "wpscan",

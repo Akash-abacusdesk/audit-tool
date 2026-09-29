@@ -10,6 +10,10 @@ ENV HOME=/tmp \
 
 WORKDIR /tmp
 
+# named volumes mount empty + root-owned; pre-create so the volume inherits
+# this ownership on first mount (container runs as non-root 10001).
+RUN mkdir -p /tmp/trivy-cache && chown -R 10001:10001 /tmp/trivy-cache
+
 USER 10001
 
 ENTRYPOINT ["trivy"]

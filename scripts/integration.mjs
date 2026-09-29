@@ -180,6 +180,9 @@ function apiEnv(extra) {
     PORT,
     DATABASE_URL: dbUrl,
     PGBOSS_URL: process.env.PGBOSS_URL || dbUrl,
+    // The suite deliberately makes many wrong-password logins from one address: don't let the brute-force throttle trip it.
+    LOGIN_MAX_FAILURES: '100000',
+    GLOBAL_RATE_MAX: '1000000',
     LOG_LEVEL: 'warn',
     GIT_API_BASE_URL: gitApiBase,
     GIT_CREDENTIALS_KEY: gitKey,

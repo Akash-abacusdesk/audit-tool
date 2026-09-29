@@ -10,14 +10,17 @@ ENV HOME=/tmp \
 
 WORKDIR /app
 
-# Monorepo workspace install (hoists @platform/* + apps/api deps).
+# Monorepo workspace install (hoists @platform/* + apps/api deps). Dev deps are
+# needed here: the build below runs tsc. NODE_ENV=production is set afterwards.
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 
 COPY . .
 
-# Build only the API package (dist/ already present in repo; rebuild for CI parity).
-RUN npm run build -w apps/api
+# dist/ is gitignored and .dockerignore'd: build every referenced package from source (tsc -b).
+RUN npm run build
+
+ENV NODE_ENV=production
 
 USER 10001
 

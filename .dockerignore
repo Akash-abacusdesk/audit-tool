@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+.git
+graphify-out
+docs
+tests
+*.md
+.env
+infrastructure/.env

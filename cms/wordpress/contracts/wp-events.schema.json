@@ -63,7 +63,7 @@
     "redeem": {
       "method": "POST",
       "path": "/api/v1/jit/redeem",
-      "body": { "token_hash": "sha256 hex of opaque one-time token", "request_id": "uuid" },
+      "body": { "token": "the raw opaque one-time token (central hashes it; sent over TLS)", "request_id": "uuid" },
       "response": "200 { grant_id: string, ttl_seconds: integer, requester: string }",
       "note": "central marks token consumed atomically; WP stores token_hash ONLY (hash-only storage) and provisions a short-lived administrator with a single-fire auto-revoke cron."
     },

@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build # tsc -b over api + packages
+      - run: npx vitest run tests/unit
+      - name: admin UI type-check + build
+        run: |
+          npm run lint -w apps/admin
+          npm run build -w apps/admin
+
+  integration:
+    # Real Postgres + the built API + the canned GitHub stub: the suites that need only those three.
+    # (scheduler/scanner suites need the full docker stack - scripts/integration.mjs - and stay out of CI for now.)
+    runs-on: ubuntu-latest
+    needs: unit
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: platform
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://postgres:ci@127.0.0.1:5432/platform
+      INTEGRATION_DB_URL: postgres://postgres:ci@127.0.0.1:5432/platform
+      SMOKE_BASE_URL: http://127.0.0.1:3100
+      GIT_STUB_TOKEN: stub-pat-token-1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: start github stub + API
+        run: |
+          GIT_STUB_PORT=6599 node scripts/github-stub.cjs > stub.log 2>&1 &
+          PORT=3100 LOG_LEVEL=warn \
+            LOGIN_MAX_FAILURES=100000 GLOBAL_RATE_MAX=1000000 \
+            GIT_API_BASE_URL=http://127.0.0.1:6599 \
+            GIT_CREDENTIALS_KEY=$(printf '11%.0s' $(seq 32)) \
+            node apps/api/dist/main.js > api.log 2>&1 &
+          for i in $(seq 60); do curl -sf http://127.0.0.1:3100/readyz && break; sleep 1; done
+          curl -sf http://127.0.0.1:3100/readyz
+      - name: integration suites
+        run: npx vitest run --no-file-parallelism tests/integration/auth.integration.test.ts tests/integration/authz-matrix.integration.test.ts tests/integration/git-sync.integration.test.ts
+      - name: acceptance suite (live subset)
+        run: |
+          # the integration suites above leave users behind; the acceptance suite bootstraps its own admin
+          psql "$DATABASE_URL" -c "truncate api_users cascade"
+          node scripts/acceptance-suite.mjs --base-url http://127.0.0.1:3100
+      - if: failure()
+        run: tail -n 80 api.log stub.log

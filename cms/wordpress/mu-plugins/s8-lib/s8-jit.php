@@ -8,7 +8,7 @@
  *                                    -> 202 { request_id }
  *   - Human approves centrally; central issues a ONE-TIME opaque token.
  *   - WP redeems the token:         POST {CENTRAL}/api/v1/jit/redeem
- *                                    body { token_hash: sha256(token), request_id }
+ *                                    body { token, request_id }
  *                                    -> 200 { grant_id, ttl_seconds, requester }
  *                                    (central marks the token consumed, atomic)
  *   - WP provisions a SHORT-LIVED administrator, stores ONLY token_hash
@@ -95,7 +95,7 @@ if ( ! function_exists( 's8_jit_redeem' ) ) {
 		$resp      = wp_remote_post( $url, array(
 			'timeout'  => 10,
 			'headers'  => array( 'Content-Type' => 'application/json' ),
-			'body'     => json_encode( array( 'token_hash' => $tokenHash, 'request_id' => $requestId ) ),
+			'body'     => json_encode( array( 'token' => $token, 'request_id' => $requestId ) ),
 		) );
 		if ( is_wp_error( $resp ) ) {
 			return array( 'ok' => false, 'error' => $resp->get_error_message() );
