@@ -17,6 +17,7 @@ import { PgUpdateStore } from './update/pg-store.js';
 import { UpdateWorker } from './update/worker.js';
 import { telegramClient } from './routes/telegram.js';
 import { startReconciler } from './jobs/reconcile.js';
+import { startTrivyDbRefresh } from './jobs/trivy-db.js';
 import { lifecycle } from './util/lifecycle.js';
 
 /**
@@ -137,6 +138,7 @@ async function main(): Promise<void> {
   await scheduler.start();
   bootAt('scheduler started');
   await startReconciler(boss.inner, pool, scheduler);
+  await startTrivyDbRefresh(boss.inner);
   bootAt('pre-buildApp');
   // S4-B: reap leaked worker containers from crashed runs (idempotent, env-tuned).
   const sweeper = startOrphanSweeper();

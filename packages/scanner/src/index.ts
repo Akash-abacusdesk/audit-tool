@@ -4,6 +4,7 @@ export * from './manifest.js';
 export * from './registry.js';
 export * from './run.js';
 export * from './ingest.js';
+export { refreshTrivyDb, type RefreshOptions, type RefreshResult } from './trivy-db.js';
 
 // Adapters (exposed for unit testing + reuse).
 export { normalizeSemgrep } from './adapters/semgrep.js';

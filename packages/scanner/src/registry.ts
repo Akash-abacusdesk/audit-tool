@@ -75,7 +75,13 @@ export const REGISTRY: Record<string, ScannerDef> = {
       profile: 'large',
       outFile: 'trivy.json',
       egress: 'bridge', // needs vuln-DB mirror for fresh scans
-      cmd: (o) => ['fs', '--format', 'json', '--output', `/out/${o}`, '/workspace'],
+      // 20m: trivy's default 5m timeout kills a cold DB download on a slow link. With the persistent cache the DB is kept
+      // fresh by the refresher (jobs/trivy-db.ts), so scans skip the inline update and never download.
+      cmd: (o) => [
+        'fs', '--format', 'json', '--output', `/out/${o}`, '--timeout', '20m',
+        ...(process.env.TRIVY_CACHE_HOST_DIR ? ['--skip-db-update'] : []),
+        '/workspace',
+      ],
       extraScratch: [{ path: '/tmp/trivy-cache', sizeMb: 2048 }],
       persistentCache: { hostEnv: 'TRIVY_CACHE_HOST_DIR', container: '/tmp/trivy-cache' },
     },
