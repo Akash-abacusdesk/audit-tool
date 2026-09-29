@@ -32,6 +32,6 @@ export async function startTrivyDbRefresh(boss: PgBoss): Promise<void> {
   } catch {
     // already scheduled
   }
-  await boss.work(QUEUE, async () => run());
+  await boss.work(QUEUE, { pollingIntervalSeconds: 30 }, async () => run());
   void run().catch(() => {}); // boot-time refresh, off the startup path
 }

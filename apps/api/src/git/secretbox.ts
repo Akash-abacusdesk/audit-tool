@@ -17,7 +17,7 @@ export function loadCredentialsKey(keyHex?: string): Buffer {
 
 export function encryptToken(plaintext: string, key: Buffer): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   const data = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64');
 }
@@ -30,7 +30,8 @@ export function decryptToken(ciphertext: string, key: Buffer): string | null {
     const iv = raw.subarray(0, 12);
     const tag = raw.subarray(12, 28);
     const data = raw.subarray(28);
-    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    // Pin the tag length: without it GCM accepts truncated (forgeable) tags.
+    const decipher = createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
   } catch {

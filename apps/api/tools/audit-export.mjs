@@ -86,7 +86,7 @@ function chainHash(prevHash, events) {
 
 function encryptBuffer(key, plain) {
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   const ct = Buffer.concat([cipher.update(plain), cipher.final()]);
   return Buffer.concat([Buffer.from('AE1'), iv, cipher.getAuthTag(), ct]);
 }
@@ -95,7 +95,7 @@ function decryptBuffer(key, blob) {
   if (blob.subarray(0, 3).toString() !== 'AE1') throw new Error('bad magic');
   const iv = blob.subarray(3, 15);
   const tag = blob.subarray(15, 31);
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  const decipher = createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(blob.subarray(31)), decipher.final()]);
 }

@@ -12,7 +12,7 @@
  *
  * Usage:
  *   node scripts/benchmark.mjs --base-url http://127.0.0.1:3000 \
- *     [--concurrency 10] [--requests 100] [--scenario all|availability|findings|jit]
+ *     [--concurrency 10] [--requests 100] [--scenario all|availability|findings|reads|jit]
  *
  * If the target instance already has users (bootstrap returns 409), set
  * BENCH_EMAIL/BENCH_PASSWORD to an existing account with `manager` (or
@@ -164,11 +164,48 @@ async function scenarioFindings(results, token, orgId, projectId) {
   results.push(report('findings-ingest (API latency proxy)', samples, 5 * 60_000, 95));
 }
 
-async function scenarioJit(results, token) {
+// Authenticated GET paths: what the admin UI and API clients actually spend their time on.
+async function scenarioReads(results, token, orgId, projectId) {
+  // seed a realistic findings volume (2 scans x 1000) so list/search queries have something to scan
+  for (let s = 0; s < 2; s++) {
+    const scanId = `seed-${s}-${randomUUID().slice(0, 8)}`;
+    const sev = ['info', 'low', 'medium', 'high', 'critical'];
+    await call(API, `/scans/${scanId}/findings`, {
+      method: 'POST', token,
+      body: { scan_id: scanId, project_id: projectId, tool: { name: 'semgrep' }, target: { kind: 'repo', ref: 'main' }, status: 'completed',
+        findings: Array.from({ length: 1000 }, (_, i) => ({ finding_fingerprint: `seed-${s}-${i}`, title: `seeded finding ${i}`, severity: sev[i % 5], confidence: 'firm' })) },
+    });
+  }
+  const paths = {
+    'GET /auth/me': '/auth/me',
+    'GET /findings (project, page 50)': `/findings?projectId=${projectId}&limit=50`,
+    'GET /findings (org scope, page 50)': `/findings?orgId=${orgId}&limit=50`,
+    'GET /findings?search=': `/findings?projectId=${projectId}&search=seeded%20finding%20999&limit=50`,
+    'GET /scans': `/scans?projectId=${projectId}&limit=50`,
+  };
+  for (const [name, path] of Object.entries(paths)) {
+    const samples = [];
+    await pool(ARGS.concurrency, ARGS.requests, async () => {
+      const r = await call(API, path, { token });
+      if (r.status === 200) samples.push(r.elapsedMs);
+      return r;
+    });
+    // no PRD SLO for reads: report the distribution, gate loosely at 1s for 95%
+    results.push(report(name, samples, 1000, 95));
+  }
+}
+
+async function scenarioJit(results, token, orgId) {
   const samples = [];
+  // Requester and approver must differ (no-self rule): mint a second account to request with.
+  const email2 = `req-${randomUUID().slice(0, 8)}@bench.local`;
+  const pw2 = 'bench-pass-123456';
+  const u2 = await call(API, '/users', { method: 'POST', token, body: { email: email2, password: pw2, displayName: 'Bench Requester' } });
+  await call(API, '/role-bindings', { method: 'POST', token, body: { userId: u2.body?.data?.id, role: 'manager', orgId } });
+  const requesterToken = (await call(API, '/auth/login', { method: 'POST', body: { email: email2, password: pw2 } })).body?.data?.token;
   await pool(ARGS.concurrency, ARGS.requests, async (i) => {
     const t0 = performance.now();
-    const reqRes = await call(ROOT, '/jit/requests', { method: 'POST', token, body: { site_id: `bench-${i}`, reason: 'benchmark', duration_minutes: 15 } });
+    const reqRes = await call(ROOT, '/jit/requests', { method: 'POST', token: requesterToken, body: { site_id: `bench-${i}`, reason: 'benchmark', duration_minutes: 15 } });
     const requestId = reqRes.body?.data?.request_id;
     if (!requestId) return { elapsedMs: performance.now() - t0 };
     const approveRes = await call(ROOT, `/jit/requests/${requestId}/approve`, { method: 'POST', token });
@@ -197,7 +234,7 @@ async function main() {
     await scenarioAvailability(results);
   }
 
-  if (ARGS.scenario === 'all' || ARGS.scenario === 'findings' || ARGS.scenario === 'jit') {
+  if (ARGS.scenario === 'all' || ARGS.scenario === 'findings' || ARGS.scenario === 'jit' || ARGS.scenario === 'reads') {
     const session = await getSession();
     const me = await call(API, '/auth/me', { token: session.token });
     const orgId = me.body.data.bindings[0].orgId;
@@ -212,8 +249,13 @@ async function main() {
         console.log(`\n[findings] skipped: could not create a bench project (status ${proj.status}, needs step-up — see README below)`);
       }
     }
+    if (ARGS.scenario === 'all' || ARGS.scenario === 'reads') {
+      const proj = await call(API, '/projects', { method: 'POST', token: session.token, body: { orgId, name: 'Bench Reads', slug: `reads-${randomUUID().slice(0, 8)}` } });
+      if (proj.status === 201) await scenarioReads(results, session.token, orgId, proj.body.data.id);
+      else console.log(`\n[reads] skipped: could not create a project (status ${proj.status})`);
+    }
     if (ARGS.scenario === 'all' || ARGS.scenario === 'jit') {
-      await scenarioJit(results, session.token);
+      await scenarioJit(results, session.token, orgId);
     }
   }
 

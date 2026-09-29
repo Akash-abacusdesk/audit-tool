@@ -10,7 +10,7 @@ describe('reconciler', () => {
   it('re-sends the job for runs stuck in an in-flight state', async () => {
     let handler: () => Promise<void> = async () => {};
     const send = vi.fn(async () => 'job');
-    const boss = { createQueue: vi.fn(), schedule: vi.fn(), send, work: vi.fn(async (_q: string, h: () => Promise<void>) => { handler = h; }) };
+    const boss = { createQueue: vi.fn(), schedule: vi.fn(), send, work: vi.fn(async (_q: string, ...rest: unknown[]) => { handler = rest[rest.length - 1] as () => Promise<void>; }) };
     const pool = {
       query: vi.fn(async (sql: string) => {
         if (sql.includes('FROM api_staging_runs')) {

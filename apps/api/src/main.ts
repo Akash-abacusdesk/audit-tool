@@ -58,7 +58,9 @@ async function main(): Promise<void> {
     } catch {
       // already exists
     }
-    await boss.inner.work(queue, async (jobs) => {
+    // These queues are low-traffic and none is latency-critical: poll every few seconds instead of pg-boss's 2s default
+    // (every replica runs a poller per queue, so idle polling is a steady per-replica DB load).
+    await boss.inner.work(queue, { pollingIntervalSeconds: Number(process.env.QUEUE_POLL_SECONDS ?? 5) }, async (jobs) => {
       for (const job of jobs) await handle(job.data);
     });
   };

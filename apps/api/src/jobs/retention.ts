@@ -23,7 +23,7 @@ export async function startWebhookRetention(boss: PgBoss, pool: Pool): Promise<v
   } catch {
     // already scheduled
   }
-  await boss.work(RETENTION_QUEUE, async () => {
+  await boss.work(RETENTION_QUEUE, { pollingIntervalSeconds: 30 }, async () => {
     const window = (d: number) => String(d);
     await prune(pool, 'webhook events', 'api_webhook_events', `received_at < now() - ($1 || ' days')::interval`, window(days));
     // Bounded-growth tables that had no purge at all. api_audit_events is deliberately absent: the app role
@@ -31,6 +31,7 @@ export async function startWebhookRetention(boss: PgBoss, pool: Pool): Promise<v
     const sessionDays = window(Number(process.env.SESSION_RETENTION_DAYS ?? 7));
     await prune(pool, 'dead sessions', 'api_sessions',
       `LEAST(expires_at, COALESCE(revoked_at, expires_at)) < now() - ($1 || ' days')::interval`, sessionDays);
+    await prune(pool, 'rate-limit buckets', 'api_rate_limits', `window_start < now() - ($1 || ' hours')::interval`, '2');
     await prune(pool, 'idempotency keys', 'api_idempotency_keys',
       `created_at < now() - ($1 || ' days')::interval`, window(Number(process.env.IDEMPOTENCY_RETENTION_DAYS ?? 7)));
     await prune(pool, 'sent notifications', 'notification_outbox',

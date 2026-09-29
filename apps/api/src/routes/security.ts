@@ -12,7 +12,7 @@ import {
   isAdminUrl,
 } from '../auth/privileged.js';
 import { getLockdownStatus, setLockdown } from '../security/lockdown.js';
-import { createLimiter } from '../util/rate-limit.js';
+import { createSharedLimiter } from '../util/rate-limit-pg.js';
 import { beginEnrollment, confirmEnrollment, disableMfa, isMfaActive, verifySecondFactor } from '../auth/mfa.js';
 import { otpauthUri } from '../auth/totp.js';
 
@@ -41,15 +41,16 @@ export async function adminGate(app: FastifyInstance, deps: Deps): Promise<void>
   });
 }
 
-const stepUpLimiter = createLimiter(
-  Number(process.env.ADMIN_STEPUP_MAX_ATTEMPTS ?? 5),
-  Number(process.env.ADMIN_STEPUP_WINDOW_MIN ?? 15) * 60_000
-);
-const rateLimited = stepUpLimiter.blocked;
-const recordAttempt = stepUpLimiter.record;
-
 export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   console.log('[boot] plugin:security enter');
+  // Shared across replicas: an attacker must not get N x the attempts by spreading over N API instances.
+  const stepUpLimiter = createSharedLimiter(
+    deps.pool,
+    Number(process.env.ADMIN_STEPUP_MAX_ATTEMPTS ?? 5),
+    Number(process.env.ADMIN_STEPUP_WINDOW_MIN ?? 15) * 60_000
+  );
+  const rateLimited = (key: string) => stepUpLimiter.blocked(key);
+  const recordAttempt = (key: string) => stepUpLimiter.record(key);
 
   /**
    * Admin-plane gate for every admin.ts route — enforced here so no existing
@@ -78,7 +79,7 @@ export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<
         throw new ApiError('VALIDATION_ERROR', 'password is required');
       }
       const actor = req.actor!;
-      if (rateLimited(actor.user.id)) {
+      if (await rateLimited(actor.user.id)) {
         await recordAudit(deps.pool, {
           actorId: actor.user.id,
           action: 'auth.stepup',
@@ -96,7 +97,7 @@ export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<
       );
       const valid = await verifyPassword(body.password, stored.rows[0]!.password_hash);
       if (!valid) {
-        recordAttempt(actor.user.id);
+        await recordAttempt(actor.user.id);
         await recordAudit(deps.pool, {
           actorId: actor.user.id,
           action: 'auth.stepup',
@@ -114,7 +115,7 @@ export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<
       if (mfaActive) {
         const b = body as { code?: unknown; recoveryCode?: unknown };
         if (!(await verifySecondFactor(deps.pool, actor.user.id, b))) {
-          recordAttempt(actor.user.id);
+          await recordAttempt(actor.user.id);
           await recordAudit(deps.pool, {
             actorId: actor.user.id,
             action: 'auth.stepup',
@@ -149,10 +150,10 @@ export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<
   async function assertPassword(req: import('fastify').FastifyRequest, password: unknown): Promise<void> {
     const actor = req.actor!;
     if (typeof password !== 'string' || !password) throw new ApiError('VALIDATION_ERROR', 'password is required');
-    if (rateLimited(actor.user.id)) throw new ApiError('RATE_LIMITED', 'too many attempts; try later');
+    if (await rateLimited(actor.user.id)) throw new ApiError('RATE_LIMITED', 'too many attempts; try later');
     const stored = await deps.pool.query<{ password_hash: string }>('SELECT password_hash FROM api_users WHERE id = $1', [actor.user.id]);
     if (!(await verifyPassword(password, stored.rows[0]!.password_hash))) {
-      recordAttempt(actor.user.id);
+      await recordAttempt(actor.user.id);
       throw new ApiError('UNAUTHORIZED', 'invalid password');
     }
   }
@@ -168,10 +169,10 @@ export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<
 
   app.post('/auth/mfa/confirm', { preHandler: [assertManagementNetwork, requireAuth] }, async (req) => {
     const actor = req.actor!;
-    if (rateLimited(actor.user.id)) throw new ApiError('RATE_LIMITED', 'too many attempts; try later');
+    if (await rateLimited(actor.user.id)) throw new ApiError('RATE_LIMITED', 'too many attempts; try later');
     const codes = await confirmEnrollment(deps.pool, actor.user.id, String((req.body as { code?: unknown } | null)?.code ?? ''));
     if (!codes) {
-      recordAttempt(actor.user.id);
+      await recordAttempt(actor.user.id);
       throw new ApiError('UNAUTHORIZED', 'invalid code');
     }
     await recordAudit(deps.pool, { actorId: actor.user.id, action: 'auth.mfa.confirm', result: 'allow', resource: `user:${actor.user.id}`, requestId: req.id });
@@ -184,7 +185,7 @@ export async function securityRoutes(app: FastifyInstance, deps: Deps): Promise<
     await assertPassword(req, b.password);
     if (await isMfaActive(deps.pool, actor.user.id)) {
       if (!(await verifySecondFactor(deps.pool, actor.user.id, b))) {
-        recordAttempt(actor.user.id);
+        await recordAttempt(actor.user.id);
         throw new ApiError('UNAUTHORIZED', 'a valid authenticator code (or recovery code) is required');
       }
     }

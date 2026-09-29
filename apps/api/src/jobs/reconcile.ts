@@ -26,7 +26,7 @@ export async function startReconciler(boss: PgBoss, pool: Pool, scheduler?: Sche
   } catch {
     // already scheduled
   }
-  await boss.work(QUEUE, async () => {
+  await boss.work(QUEUE, { pollingIntervalSeconds: 30 }, async () => {
     const old = `updated_at < now() - make_interval(mins => $1)`;
     let resent = 0;
 

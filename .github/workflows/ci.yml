@@ -11,8 +11,8 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -23,6 +23,21 @@ jobs:
         run: |
           npm run lint -w apps/admin
           npm run build -w apps/admin
+
+  security:
+    # Dogfood: the same pinned scanner images the platform runs, on this repo. Test fixtures are excluded on purpose
+    # (deliberately vulnerable / fake credentials); see .gitleaks.toml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: secrets (gitleaks)
+        run: >
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks@sha256:75bdb2b2f4db213cde0b8295f13a88d6b333091bbfbf3012a4e083d00d31caba
+          detect --source /repo --no-git --redact --exit-code 1
+      - name: dependencies (trivy)
+        run: >
+          docker run --rm -v "$PWD:/repo" ghcr.io/aquasecurity/trivy@sha256:35e972d4c97895711cb2de6594cc1774b61e6b9dc7661ef73a76dd649f006c8d
+          fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --skip-dirs tests/fixtures --skip-dirs node_modules /repo
 
   integration:
     # Real Postgres + the built API + the canned GitHub stub: the suites that need only those three.
@@ -47,8 +62,8 @@ jobs:
       SMOKE_BASE_URL: http://127.0.0.1:3100
       GIT_STUB_TOKEN: stub-pat-token-1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm

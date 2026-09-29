@@ -149,7 +149,9 @@ export async function scanningRoutes(app: FastifyInstance, deps: Deps): Promise<
 
   app.post(
     '/scans/:scanId/findings',
-    { preHandler: requirePermission('scan.ingest') },
+    // The envelope allows up to 5000 findings (evidence up to 20KB each): Fastify's 1MiB default would 413 a large
+    // scan, so give this route its own ceiling (every other route keeps the default).
+    { preHandler: requirePermission('scan.ingest'), bodyLimit: Number(process.env.INGEST_BODY_LIMIT_BYTES ?? 32 * 1024 * 1024) },
     async (req, reply) => {
       const scanId = (req.params as { scanId: string }).scanId;
       const body = req.body as Record<string, unknown>;

@@ -16,7 +16,7 @@ import { burnPasswordCheck, hashPassword, verifyPassword } from '../auth/passwor
 import { recordAudit } from '../auth/audit.js';
 import { bearerOf, createSession, requireAuth, revokeSessionByToken } from '../auth/service.js';
 import { withTx } from '../db/pool.js';
-import { createLimiter } from '../util/rate-limit.js';
+import { createSharedLimiter } from '../util/rate-limit-pg.js';
 
 interface Deps {
   pool: Pool;
@@ -61,13 +61,14 @@ export function toBindingDto(r: {
 const BINDING_SELECT = `SELECT id::text, user_id::text, role, org_id::text, project_id::text,
         environment_id::text, created_at FROM api_role_bindings`;
 
-const loginLimiter = createLimiter(
-  Number(process.env.LOGIN_MAX_FAILURES ?? 10),
-  Number(process.env.LOGIN_WINDOW_MIN ?? 15) * 60_000
-);
-
 export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void> {
   console.log('[boot] plugin:auth enter');
+  // Shared across replicas (Postgres), so brute force can't be spread over API instances.
+  const loginLimiter = createSharedLimiter(
+    deps.pool,
+    Number(process.env.LOGIN_MAX_FAILURES ?? 10),
+    Number(process.env.LOGIN_WINDOW_MIN ?? 15) * 60_000
+  );
   /**
    * One-time bootstrap — creates the first user + org while zero users exist.
    * The first account holds BOTH manager and security_admin to break the
@@ -130,8 +131,8 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
 
     // Failed-login throttle per account and per source address; blocks before any scrypt work.
     const keys = [`email:${email}`, `ip:${req.ip}`];
-    if (keys.some((k) => loginLimiter.blocked(k))) {
-      throw new ApiError('RATE_LIMITED', 'too many failed logins; try later');
+    for (const k of keys) {
+      if (await loginLimiter.blocked(k)) throw new ApiError('RATE_LIMITED', 'too many failed logins; try later');
     }
 
     const found = await deps.pool.query<{
@@ -150,7 +151,7 @@ export async function authRoutes(app: FastifyInstance, deps: Deps): Promise<void
     if (row && row.is_active) valid = await verifyPassword(parsed.data.password, row.password_hash);
     else await burnPasswordCheck(parsed.data.password);
     if (!valid || !row) {
-      for (const k of keys) loginLimiter.record(k);
+      for (const k of keys) await loginLimiter.record(k);
       await recordAudit(deps.pool, {
         actorId: row?.id ?? null,
         action: 'auth.login',

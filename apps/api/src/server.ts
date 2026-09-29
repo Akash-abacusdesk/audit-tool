@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { gzip } from 'node:zlib';
+import { promisify } from 'node:util';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import type { PgBoss } from 'pg-boss';
@@ -48,6 +50,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     },
     // Behind a reverse proxy set TRUST_PROXY to its address/CIDR list (comma-separated) so req.ip is the real client.
     trustProxy: process.env.TRUST_PROXY ? process.env.TRUST_PROXY.split(',').map((x) => x.trim()) : false,
+    // Node's defaults (5s keep-alive) sit below common load-balancer idle timeouts, which produces sporadic resets
+    // on reused connections; keep ours above them. requestTimeout bounds a slow/stalled request body.
+    keepAliveTimeout: Number(process.env.HTTP_KEEPALIVE_MS ?? 65_000),
+    requestTimeout: Number(process.env.HTTP_REQUEST_TIMEOUT_MS ?? 120_000),
     genReqId: (req) => {
       const h = req.headers['x-request-id'];
       // Client-supplied ids land in logs and audit rows: accept only a short, plain token.
@@ -81,6 +87,22 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('cache-control', 'no-store');
     reply.header('referrer-policy', 'no-referrer');
+  });
+
+  // Compress JSON responses over 1KB when the client accepts gzip (a findings page is tens of KB of repetitive
+  // JSON; ~10x smaller on the wire). Async zlib keeps the event loop free. Small/streamed/already-encoded
+  // payloads are left alone.
+  const gz = promisify(gzip);
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (typeof payload !== 'string' && !Buffer.isBuffer(payload)) return payload;
+    if (reply.getHeader('content-encoding')) return payload;
+    if (!String(reply.getHeader('content-type') ?? '').startsWith('application/json')) return payload;
+    if (!/\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) return payload;
+    if (Buffer.byteLength(payload) < 1024) return payload;
+    reply.header('content-encoding', 'gzip');
+    reply.header('vary', 'accept-encoding');
+    reply.removeHeader('content-length');
+    return gz(payload);
   });
 
   // Single error funnel — routes throw ApiError, clients only ever see the envelope.

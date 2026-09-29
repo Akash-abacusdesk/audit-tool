@@ -1,0 +1,15 @@
+# Scan config for this repo's own secret scanning (CI + the platform scanning itself).
+# Test fixtures and the dev/test harnesses contain deliberately fake credentials (that is what the scanner
+# tests need); they are allow-listed by PATH so a real leak anywhere else still fails the scan.
+title = "platform gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "fake credentials in tests, fixtures and dev harnesses"
+paths = [
+  '''(^|/)tests/''',
+  '''(^|/)scripts/(acceptance-suite|benchmark|smoke|integration)\.mjs$''',
+  '''(^|/)scanner/tests/''',
+]

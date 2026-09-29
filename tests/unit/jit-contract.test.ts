@@ -56,3 +56,12 @@ describe('S8-D1 contract: JIT DTOs', () => {
     expect(jitRevokeInput.parse({ grant_id: 'grant_1' }).grant_id).toBe('grant_1');
   });
 });
+
+describe('bootstrap password policy', () => {
+  it('holds the first (most privileged) account to the 12-char minimum', async () => {
+    const { bootstrapInput } = await import('@platform/shared');
+    const base = { email: 'a@x.io', displayName: 'A', orgName: 'O', orgSlug: 'o' };
+    expect(bootstrapInput.safeParse({ ...base, password: 'short' }).success).toBe(false);
+    expect(bootstrapInput.safeParse({ ...base, password: 'long-enough-pw!' }).success).toBe(true);
+  });
+});

@@ -83,6 +83,9 @@ export const loginInput = z.object({
 
 /** One-time bootstrap: only accepted while zero users exist. */
 export const bootstrapInput = loginInput.extend({
+  // The first account holds manager + security_admin: it gets the same minimum as every other password, not login's
+  // "non-empty" (which exists only so a legacy short password can still be typed at the login form).
+  password: z.string().min(12).max(200),
   displayName: z.string().min(1).max(100),
   orgName: z.string().min(1).max(100),
   orgSlug: slug,

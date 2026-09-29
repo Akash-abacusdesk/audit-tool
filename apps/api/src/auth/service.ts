@@ -84,13 +84,17 @@ async function loadBindings(db: Pick<Pool, 'query'>, userId: string): Promise<Ro
   }));
 }
 
-/** Resolve a bearer token to an active actor, or null. */
+/** Resolve a bearer token to an active actor, or null. One round trip: the session, user and role bindings together. */
 export async function resolveActor(
   db: Pick<Pool, 'query'>,
   token: string
 ): Promise<Actor | null> {
-  const res = await db.query<SessionRow>(
-    `SELECT s.id AS session_id, u.id, u.email, u.display_name, u.is_active, u.created_at
+  const res = await db.query<SessionRow & { bindings?: { role: RoleBindingView['role']; orgId: string; projectId: string | null; environmentId: string | null }[] | null }>(
+    `SELECT s.id AS session_id, u.id, u.email, u.display_name, u.is_active, u.created_at,
+            (SELECT COALESCE(json_agg(json_build_object(
+                      'role', b.role, 'orgId', b.org_id::text,
+                      'projectId', b.project_id::text, 'environmentId', b.environment_id::text)), '[]'::json)
+               FROM api_role_bindings b WHERE b.user_id = u.id) AS bindings
      FROM api_sessions s JOIN api_users u ON u.id = s.user_id
      WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`,
     [hashToken(token)]
@@ -99,7 +103,8 @@ export async function resolveActor(
   if (!row || !row.is_active) return null;
   return {
     sessionId: row.session_id,
-    bindings: await loadBindings(db, row.id),
+    // Rows without the aggregated column (an older query shape / a test double) fall back to the separate lookup.
+    bindings: row.bindings ?? (await loadBindings(db, row.id)),
     user: {
       id: row.id,
       email: row.email,
